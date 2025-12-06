@@ -11,7 +11,7 @@ This module provides a `RestClient` that abstracts away the complexities of API 
 - [Development Setup](#development-setup)
 - [Quick Start: Fetching a User](#quick-start-fetching-a-user)
 - [Async Quick Start](#async-quick-start)
-- [How It Works: The Behavior Pipeline](#how-it-works-the-behavior-pipeline)
+- [How It Works: Dual Pipeline Architecture](#how-it-works-dual-pipeline-architecture)
 - [Advanced Usage](#advanced-usage)
 - [Async Usage](#async-usage)
 - [Testing](#testing)
@@ -152,18 +152,29 @@ Run `just` or `just help` to see all available commands:
 
 ```
 reqflow/
-├── pyproject.toml      # Project configuration (PEP 621)
-├── uv.lock            # Locked dependencies (uv)
-├── Justfile           # Task runner commands
-├── reqflow/           # Source code
-│   ├── __init__.py
-│   ├── rest_client.py
-│   ├── behaviors.py
-│   └── ...
-└── tests/             # Test suite
+├── pyproject.toml          # Project configuration (PEP 621)
+├── uv.lock                 # Locked dependencies (uv)
+├── Justfile                # Task runner commands
+├── reqflow/                # Source code
+│   ├── __init__.py         # Main exports
+│   ├── core/               # Shared modules
+│   │   ├── errors.py       # Error types
+│   │   └── request_response.py
+│   ├── sync/               # Synchronous client
+│   │   ├── rest_client.py
+│   │   ├── behaviors.py
+│   │   ├── circuit_breakers.py
+│   │   └── interceptors.py
+│   └── async_/             # Asynchronous client
+│       ├── rest_client.py
+│       ├── behaviors.py
+│       ├── circuit_breakers.py
+│       └── interceptors.py
+└── tests/                  # Test suite
     ├── conftest.py
-    ├── test_*.py
-    └── ...
+    ├── core/               # Core module tests
+    ├── sync/               # Sync client tests
+    └── async_/             # Async client tests
 ```
 
 ### Code Style
@@ -197,33 +208,39 @@ class ErrorResponse(BaseModel):
     detail: str
 ```
 
-### Step 2: Initialize the RestClient
+### Step 2: Configure the Circuit Breaker Registry
 
-Create a shared instance of the client for the external service you want to communicate with. For production use, it is critical to configure a **Circuit Breaker**.
+Configure the circuit breaker registry once at application startup. This enables automatic circuit breaker management for all your REST clients.
+
+```python
+# in your_app/config.py (or Django settings.py, FastAPI lifespan, etc.)
+from reqflow import CircuitBreakerRegistry
+
+# Configure once at startup - Redis enables shared state across processes
+CircuitBreakerRegistry.configure(
+    redis_url="redis://localhost:6379/0",  # Optional: omit for in-memory only
+    default_fail_max=5,         # Opens circuit after 5 consecutive failures
+    default_reset_timeout=60    # Tries to close circuit after 60 seconds
+)
+```
+
+### Step 3: Initialize the RestClient
+
+Create client instances - circuit breakers are automatically managed by the registry based on `service_name`.
 
 ```python
 # in your_app/clients.py
 from reqflow import RestClient
-from reqflow.circuit_breakers import create_shared_breaker
 
-# For production, create a shared circuit breaker for each external service.
-# This prevents cascading failures if the service goes down.
-user_api_breaker = create_shared_breaker(
-    service_name="user_api",
-    fail_max=5,         # Opens the circuit after 5 consecutive failures
-    reset_timeout=60    # Tries to close the circuit after 60 seconds
-)
-
-# Create the client instance, injecting the breaker
+# Circuit breaker is automatically created/shared via the registry
 user_service_client = RestClient(
     base_url="https://api.example.com/v1",
-    service_name="user_api",
-    breaker=user_api_breaker, # Inject the circuit breaker
+    service_name="user_api",  # Registry manages breaker for this service
     max_retries=3
 )
 ```
 
-### Step 3: Make the API Call
+### Step 4: Make the API Call
 
 Now, use your client instance to make a type-safe HTTP request. If the circuit breaker is open, this call will fail instantly without sending a network request.
 
@@ -231,7 +248,7 @@ Now, use your client instance to make a type-safe HTTP request. If the circuit b
 # in your_app/services.py
 from .clients import user_service_client
 from .schemas import User
-from reqflow.errors import ResourceNotFoundError, RestClientError, CircuitBreakerOpenError
+from reqflow import ResourceNotFoundError, RestClientError, CircuitBreakerOpenError
 
 def get_user_by_id(user_id: int) -> User | None:
     """Fetches a user and handles potential API errors."""
@@ -275,10 +292,7 @@ pip install reqflow[async]
 
 ```python
 import asyncio
-from reqflow import AsyncRestClient
-from reqflow.async_circuit_breakers import create_shared_async_breaker
-
-# Define your models (same as sync)
+from reqflow import AsyncRestClient, AsyncCircuitBreakerRegistry
 from pydantic import BaseModel
 
 class User(BaseModel):
@@ -287,18 +301,17 @@ class User(BaseModel):
     email: str
 
 async def main():
-    # Create async circuit breaker
-    breaker = await create_shared_async_breaker(
-        service_name="user_api",
-        fail_max=5,
-        reset_timeout=60
+    # Configure registry once at startup
+    await AsyncCircuitBreakerRegistry.configure(
+        redis_url="redis://localhost:6379/0",  # Optional
+        default_fail_max=5,
+        default_reset_timeout=60
     )
-    
-    # Create async client
+
+    # Create async client - breaker is auto-managed by registry
     async with AsyncRestClient(
         base_url="https://api.example.com/v1",
         service_name="user_api",
-        breaker=breaker,
     ) as client:
         # Make async requests
         user = await client.get("/users/1", response_data_schema=User)
@@ -311,9 +324,9 @@ asyncio.run(main())
 ### Key Differences from Sync Client
 
 - Use `AsyncRestClient` instead of `RestClient`
+- Use `AsyncCircuitBreakerRegistry` instead of `CircuitBreakerRegistry`
 - All methods are `async def` and must be awaited
 - Use `async with` for proper resource cleanup
-- Use `create_shared_async_breaker()` for circuit breakers
 - Use `AsyncInterceptor` for interceptors
 - Idempotency headers are automatically added to POST/PUT/PATCH requests
 
@@ -426,23 +439,34 @@ The **Circuit Breaker** is a critical pattern for building resilient application
     3.  **Half-Open:** After a configured timeout (`reset_timeout`), the breaker enters the "half-open" state. It allows a single "trial" request to pass through. If it succeeds, the breaker closes. If it fails, the breaker opens again.
 
 ```python
-# For production apps, always create a shared breaker for each service client.
-# The `create_shared_breaker` helper uses Redis to share the state of the
-# breaker across all your application processes and servers.
+# Configure the registry once at application startup
+from reqflow import CircuitBreakerRegistry, RestClient
 
-from reqflow.circuit_breakers import create_shared_breaker
-
-payments_breaker = create_shared_breaker(
-    service_name="payments_api",
-    fail_max=3,
-    reset_timeout=120 # Give the payment service 2 minutes to recover
+# Redis enables shared state across all processes and servers
+CircuitBreakerRegistry.configure(
+    redis_url="redis://localhost:6379/0",
+    default_fail_max=5,
+    default_reset_timeout=60
 )
 
+# Clients automatically get breakers from the registry based on service_name
 payments_client = RestClient(
     base_url="https://api.payments.com/v1",
-    service_name="payments_api",
-    breaker=payments_breaker, # Inject the breaker
-    # ... other config
+    service_name="payments_api",  # Registry manages breaker for this service
+)
+
+# Multiple clients with the same service_name share the same breaker
+another_payments_client = RestClient(
+    base_url="https://api.payments.com/v2",
+    service_name="payments_api",  # Same breaker as above
+)
+
+# Override defaults for specific services
+breaker = CircuitBreakerRegistry.get("critical_api", fail_max=3, reset_timeout=120)
+critical_client = RestClient(
+    base_url="https://api.critical.com",
+    service_name="critical_api",
+    breaker=breaker,  # Explicit breaker with custom settings
 )
 ```
 
@@ -481,17 +505,15 @@ Interceptors are powerful hooks for adding custom logic. For example, injecting 
 **1. Create the Interceptor:**
 ```python
 # in your_app/interceptors.py
-from reqflow.interceptors import Interceptor
-from reqflow.request_response import RequestContext, ResponseContext
-from reqflow.errors import RestClientError
+from reqflow import Interceptor, RequestContext, ResponseContext, RestClientError
 
 class LoggingInterceptor(Interceptor):
     def on_before_request(self, request: RequestContext):
         print(f"Making request to {request.url}")
-    
+
     def on_after_response(self, response: ResponseContext):
         print(f"Received response with status {response.status_code}")
-    
+
     def on_error(self, error: RestClientError):
         print(f"Request failed: {error}")
 ```
@@ -519,7 +541,6 @@ Here's a step-by-step example of how to build and use a typed client for a User 
 ```python
 # in your_app/user_service/schemas.py
 from pydantic import BaseModel
-from typing import List, Optional
 
 class User(BaseModel):
     id: int
@@ -530,10 +551,10 @@ class User(BaseModel):
 class CreateUserRequest(BaseModel):
     name: str
     email: str
-    role: Optional[str] = "member"
+    role: str | None = "member"
 
 class UsersResponse(BaseModel):
-    users: List[User]
+    users: list[User]
     total: int
 ```
 
@@ -550,7 +571,7 @@ class UserServiceClient:
     def __init__(self, rest_client: RestClient):
         self._client = rest_client
 
-    def get_users(self, page: int = 1, limit: int = 10) -> List[User]:
+    def get_users(self, page: int = 1, limit: int = 10) -> list[User]:
         """Fetches a paginated list of users."""
         # The typed client knows the specific endpoint, params, and response model.
         response = self._client.get(
@@ -582,10 +603,8 @@ In your application's setup, create the generic `RestClient` and inject it into 
 
 ```python
 # in your_app/main.py or services.py
-
-from reqflow import RestClient
+from reqflow import RestClient, RestClientError
 from .user_service.client import UserServiceClient
-from reqflow.errors import RestClientError
 
 # 1. Create the generic RestClient for User Service (with breaker, etc.)
 user_service_rest_client = RestClient(
@@ -772,23 +791,25 @@ just build-wheel
 
 ### Async Circuit Breaker
 
-The async circuit breaker works similarly to the sync version but uses async Redis operations:
+The async circuit breaker registry works similarly to the sync version but uses async Redis operations:
 
 ```python
-from reqflow.async_circuit_breakers import create_shared_async_breaker
+from reqflow import AsyncCircuitBreakerRegistry, AsyncRestClient
 
-# Create async circuit breaker (supports Redis for shared state)
-breaker = await create_shared_async_breaker(
-    service_name="payment_api",
-    fail_max=3,
-    reset_timeout=120
+# Configure registry once at startup (e.g., in FastAPI lifespan)
+await AsyncCircuitBreakerRegistry.configure(
+    redis_url="redis://localhost:6379/0",
+    default_fail_max=5,
+    default_reset_timeout=60
 )
 
-async_client = AsyncRestClient(
+# Clients automatically get breakers from the registry
+async with AsyncRestClient(
     base_url="https://api.payments.com/v1",
     service_name="payment_api",
-    breaker=breaker,
-)
+) as client:
+    # Make requests...
+    pass
 ```
 
 ### Async Interceptors
@@ -796,17 +817,15 @@ async_client = AsyncRestClient(
 Create async interceptors for custom logic:
 
 ```python
-from reqflow.async_interceptors import AsyncInterceptor
-from reqflow.request_response import RequestContext, ResponseContext
-from reqflow.errors import RestClientError
+from reqflow import AsyncInterceptor, RequestContext, ResponseContext, RestClientError
 
 class LoggingInterceptor(AsyncInterceptor):
     async def on_before_request(self, request: RequestContext):
         print(f"Making request to {request.url}")
-    
+
     async def on_after_response(self, response: ResponseContext):
         print(f"Received response with status {response.status_code}")
-    
+
     async def on_error(self, error: RestClientError):
         print(f"Request failed: {error}")
 
@@ -839,7 +858,7 @@ async with AsyncRestClient(
 The client raises specific exceptions, allowing for fine-grained error handling.
 
 ```python
-from reqflow.errors import RateLimitError, ServerError, RestClientError, CircuitBreakerOpenError
+from reqflow import RateLimitError, ServerError, RestClientError, CircuitBreakerOpenError
 
 try:
     # ... make a request ...

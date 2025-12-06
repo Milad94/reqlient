@@ -17,7 +17,7 @@ from .behaviors import (
     AsyncRetryBehavior,
     AsyncStatusCodeValidationBehavior,
 )
-from .circuit_breakers import AsyncCircuitBreaker
+from .circuit_breakers import AsyncCircuitBreaker, AsyncCircuitBreakerRegistry
 from .interceptors import AsyncInterceptor
 from ..core.errors import (
     ErrorContext,
@@ -53,13 +53,14 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
         breaker: Optional[AsyncCircuitBreaker] = None,
         interceptors: Optional[List[AsyncInterceptor]] = None,
         client: Optional[httpx.AsyncClient] = None,
+        use_circuit_breaker: bool = True,
     ):
         """
         Initialize the AsyncRestClient with base configuration.
 
         Args:
             base_url: Base URL for all requests
-            service_name: The name of the service, used for logging.
+            service_name: The name of the service, used for logging and circuit breaker registry.
             logger: Logger instance to use for request/response logging
             default_headers: Default headers to include in all requests
             timeout: Request timeout in seconds
@@ -67,9 +68,12 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
             max_retries: Maximum number of retry attempts for transient errors
             retry_backoff_factor: Multiplier for exponential backoff between retry attempts
             retry_status_codes: Set of HTTP status codes that should trigger a retry
-            breaker: An optional, shared async circuit breaker instance
+            breaker: An optional async circuit breaker instance. If not provided and use_circuit_breaker
+                    is True, one will be obtained from AsyncCircuitBreakerRegistry using service_name.
             interceptors: An optional list of async interceptors to hook into the request/response cycle.
             client: Optional httpx.AsyncClient instance. If not provided, one will be created.
+            use_circuit_breaker: Whether to use a circuit breaker. If True and no breaker is provided,
+                                one will be obtained from AsyncCircuitBreakerRegistry. Default is True.
         """
         self.base_url = base_url.rstrip("/")
         self.service_name = service_name
@@ -77,6 +81,8 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
         self.default_headers = default_headers or {"Content-Type": "application/json"}
         self.timeout = timeout
         self.verify_ssl = verify_ssl
+        self._use_circuit_breaker = use_circuit_breaker
+        self._explicit_breaker = breaker
 
         # Store default behaviors to be configured per-request
         self.default_retry_config = {
@@ -89,10 +95,9 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
         self._client = client
         self._client_owned = client is None
 
-        # Build separate pipelines for read and write operations
-        pipeline_params = {
+        # Store pipeline params for lazy initialization
+        self._pipeline_params = {
             "logger": self.logger,
-            "breaker": breaker,
             "timeout": self.timeout,
             "verify_ssl": self.verify_ssl,
             "max_retries": max_retries,
@@ -100,12 +105,10 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
             "retry_status_codes": retry_status_codes or {408, 429, 500, 502, 503, 504},
             "interceptors": interceptors,
         }
-        
-        # Read pipeline: optimized for GET/HEAD
-        self.read_pipeline = self.__build_read_pipeline(**pipeline_params)
-        
-        # Write pipeline: optimized for POST/PUT/PATCH/DELETE with idempotency
-        self.write_pipeline = self.__build_write_pipeline(**pipeline_params)
+
+        # Pipelines will be built lazily or in __aenter__
+        self._read_pipeline: Optional[AsyncBehavior] = None
+        self._write_pipeline: Optional[AsyncBehavior] = None
 
     @property
     def client(self) -> httpx.AsyncClient:
@@ -115,8 +118,39 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
             self._client_owned = True
         return self._client
 
+    async def _resolve_breaker(self) -> Optional[AsyncCircuitBreaker]:
+        """Resolve circuit breaker: use provided, get from registry, or None."""
+        if self._explicit_breaker is not None:
+            return self._explicit_breaker
+        elif self._use_circuit_breaker:
+            return await AsyncCircuitBreakerRegistry.get(self.service_name)
+        return None
+
+    async def _ensure_pipelines_built(self):
+        """Ensure pipelines are built (requires async for registry access)."""
+        if self._read_pipeline is None or self._write_pipeline is None:
+            breaker = await self._resolve_breaker()
+            params = {**self._pipeline_params, "breaker": breaker}
+            self._read_pipeline = self._build_read_pipeline(**params)
+            self._write_pipeline = self._build_write_pipeline(**params)
+
+    @property
+    def read_pipeline(self) -> AsyncBehavior:
+        """Get read pipeline (must call _ensure_pipelines_built first)."""
+        if self._read_pipeline is None:
+            raise RuntimeError("Pipelines not initialized. Use 'async with' context manager.")
+        return self._read_pipeline
+
+    @property
+    def write_pipeline(self) -> AsyncBehavior:
+        """Get write pipeline (must call _ensure_pipelines_built first)."""
+        if self._write_pipeline is None:
+            raise RuntimeError("Pipelines not initialized. Use 'async with' context manager.")
+        return self._write_pipeline
+
     async def __aenter__(self):
         """Async context manager entry."""
+        await self._ensure_pipelines_built()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -129,7 +163,7 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
             await self._client.aclose()
             self._client = None
 
-    def __build_read_pipeline(
+    def _build_read_pipeline(
         self,
         logger: logging.Logger,
         timeout: int,
@@ -187,7 +221,7 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
 
         return pipeline
 
-    def __build_write_pipeline(
+    def _build_write_pipeline(
         self,
         logger: logging.Logger,
         timeout: int,
@@ -312,6 +346,9 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
             StatusCodeError: For other 4xx client errors.
             RestClientError: For any other client-related errors.
         """
+        # Ensure pipelines are initialized
+        await self._ensure_pipelines_built()
+
         # Properly join base_url and endpoint, handling edge cases like double slashes
         base = self.base_url.rstrip("/") + "/"
         endpoint_clean = endpoint.lstrip("/")

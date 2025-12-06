@@ -8,9 +8,9 @@ designed for reliable communication with external REST APIs.
 # Import from subpackages
 from .async_ import (
     AsyncCircuitBreaker,
+    AsyncCircuitBreakerRegistry,
     AsyncInterceptor,
     AsyncRestClient,
-    create_shared_async_breaker,
 )
 from .core import (
     AuthenticationError,
@@ -32,7 +32,7 @@ from .core import (
     RequestContext,
 )
 from .sync import (
-    create_shared_breaker,
+    CircuitBreakerRegistry,
     Interceptor,
     RestClient,
 )
@@ -41,11 +41,11 @@ __all__ = [
     # Main clients
     "RestClient",
     "AsyncRestClient",
-    # Circuit breakers (sync)
-    "create_shared_breaker",
+    # Circuit breaker registries
+    "CircuitBreakerRegistry",
+    "AsyncCircuitBreakerRegistry",
     # Circuit breakers (async)
     "AsyncCircuitBreaker",
-    "create_shared_async_breaker",
     # Errors
     "RestClientError",
     "RequestValidationError",

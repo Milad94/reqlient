@@ -9,7 +9,7 @@ import pytest
 import requests_mock as requests_mock_module
 from pydantic import BaseModel
 
-from reqflow.sync.circuit_breakers import create_shared_breaker
+from reqflow.sync.circuit_breakers import CircuitBreakerRegistry
 from reqflow.sync.rest_client import RestClient
 
 # Disable logging during tests unless explicitly needed
@@ -68,17 +68,21 @@ def mock_logger():
 @pytest.fixture
 def circuit_breaker():
     """Circuit breaker for testing (in-memory fallback)."""
-    return create_shared_breaker(service_name="test_service", fail_max=3, reset_timeout=5)
+    # Reset registry for clean state between tests
+    CircuitBreakerRegistry.reset()
+    return CircuitBreakerRegistry.get(service_name="test_service", fail_max=3, reset_timeout=5)
 
 
 @pytest.fixture
 def basic_client(base_url, mock_logger):
     """Basic RestClient instance without optional features."""
+    CircuitBreakerRegistry.reset()
     return RestClient(
         base_url=base_url,
         service_name="test_service",
         logger=mock_logger,
         max_retries=2,
+        use_circuit_breaker=False,  # Disable auto circuit breaker for basic tests
     )
 
 

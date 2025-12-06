@@ -1,94 +1,171 @@
 import logging
-import os
+from typing import Optional, Set
 
 import redis
-from dotenv import load_dotenv
 from pybreaker import CircuitBreaker, CircuitRedisStorage
-
-# Load environment variables from .env file
-load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# Redis configuration from environment variables with defaults
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
-REDIS_DB = int(os.getenv("REDIS_DB", "0"))
 
-# A shared Redis connection pool is crucial for performance.
-# It allows reusing connections instead of creating a new one for every request.
-redis_pool = None
-redis_client = None
-
-try:
-    redis_pool = redis.ConnectionPool(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB)
-    redis_client = redis.Redis(connection_pool=redis_pool)
-    # Test the connection
-    redis_client.ping()
-except (redis.ConnectionError, redis.TimeoutError, Exception) as e:
-    logger.warning(
-        f"Failed to connect to Redis at {REDIS_HOST}:{REDIS_PORT}. "
-        f"Circuit breaker state will not be shared across processes. Error: {e}"
-    )
-    redis_pool = None
-    redis_client = None
-
-
-def create_shared_breaker(service_name: str, fail_max: int, reset_timeout: int) -> CircuitBreaker:
+class CircuitBreakerRegistry:
     """
-    Creates a CircuitBreaker instance whose state is stored in Redis.
-    This ensures that the breaker's state is shared across all application
-    processes and threads.
+    A registry for managing circuit breakers across the application.
 
-    If Redis is unavailable, falls back to an in-memory circuit breaker
-    (state will not be shared across processes).
+    Configure once at application startup, then breakers are automatically
+    created and shared when RestClient instances use the same service_name.
 
-    Args:
-        service_name: A unique name for the service the breaker protects (e.g., "payment_api").
-                      This is used to namespace the Redis key.
-        fail_max: The number of failures required to open the circuit.
-        reset_timeout: The number of seconds to wait before moving to half-open.
+    Example:
+        # Configure once at startup (e.g., Django settings.py, FastAPI lifespan)
+        CircuitBreakerRegistry.configure(
+            redis_url="redis://localhost:6379/0",
+            default_fail_max=5,
+            default_reset_timeout=60
+        )
 
-    Returns:
-        A configured CircuitBreaker instance. If Redis is available, it will be
-        multi-process safe. Otherwise, it will use in-memory storage.
+        # RestClient automatically gets breaker from registry
+        client = RestClient(
+            base_url="https://api.example.com",
+            service_name="user_api",  # Breaker auto-resolved
+        )
 
-    Raises:
-        ValueError: If Redis connection fails and fallback is not possible.
+        # Or get breaker explicitly with custom settings
+        breaker = CircuitBreakerRegistry.get("payments", fail_max=3)
     """
-    if redis_client is not None:
-        try:
-            # The namespace ensures that keys for different breakers don't collide in Redis.
-            # The initial state is managed by pybreaker automatically based on what's in Redis,
-            # so we don't need to specify it here.
-            state_storage = CircuitRedisStorage(
-                redis_client=redis_client, namespace=f"breaker:{service_name}"
+
+    _redis_url: Optional[str] = None
+    _default_fail_max: int = 5
+    _default_reset_timeout: int = 60
+    _breakers: dict[str, CircuitBreaker] = {}
+    _redis_client: Optional[redis.Redis] = None
+    _configured: bool = False
+
+    @classmethod
+    def configure(
+        cls,
+        redis_url: Optional[str] = None,
+        default_fail_max: int = 5,
+        default_reset_timeout: int = 60,
+    ) -> None:
+        """
+        Configure the circuit breaker registry.
+
+        Call this once at application startup before creating any RestClient instances.
+
+        Args:
+            redis_url: Redis URL for shared state (e.g., "redis://localhost:6379/0").
+                      If None, breakers will use in-memory storage (not shared across processes).
+            default_fail_max: Default number of failures before opening circuit.
+            default_reset_timeout: Default seconds to wait before trying half-open.
+        """
+        cls._redis_url = redis_url
+        cls._default_fail_max = default_fail_max
+        cls._default_reset_timeout = default_reset_timeout
+        cls._configured = True
+
+        # Initialize Redis client if URL provided
+        if redis_url:
+            try:
+                cls._redis_client = redis.from_url(redis_url)
+                cls._redis_client.ping()
+                logger.info(f"CircuitBreakerRegistry connected to Redis at {redis_url}")
+            except Exception as e:
+                logger.warning(
+                    f"Failed to connect to Redis at {redis_url}. "
+                    f"Circuit breakers will use in-memory storage. Error: {e}"
+                )
+                cls._redis_client = None
+        else:
+            cls._redis_client = None
+            logger.info(
+                "CircuitBreakerRegistry configured without Redis. "
+                "Circuit breakers will use in-memory storage."
             )
-            return CircuitBreaker(
-                fail_max=fail_max, reset_timeout=reset_timeout, state_storage=state_storage
-            )
-        except Exception as e:
-            logger.warning(
-                f"Failed to create Redis-backed circuit breaker for {service_name}. "
-                f"Falling back to in-memory breaker. Error: {e}"
-            )
-            # Fall through to in-memory breaker
 
-    # Fallback to in-memory circuit breaker if Redis is not available
-    logger.info(
-        f"Creating in-memory circuit breaker for {service_name}. "
-        "State will not be shared across processes."
-    )
-    return CircuitBreaker(fail_max=fail_max, reset_timeout=reset_timeout)
+    @classmethod
+    def get(
+        cls,
+        service_name: str,
+        fail_max: Optional[int] = None,
+        reset_timeout: Optional[int] = None,
+    ) -> CircuitBreaker:
+        """
+        Get or create a circuit breaker for a service.
 
+        If a breaker already exists for the service_name, returns the existing instance.
+        Otherwise, creates a new one with the specified or default settings.
 
-# --- Define your singleton, shared breakers for each external service here ---
+        Args:
+            service_name: Unique name for the service (e.g., "user_api", "payments").
+            fail_max: Number of failures before opening circuit (uses default if None).
+            reset_timeout: Seconds to wait before trying half-open (uses default if None).
 
-# Example: Breaker for a payment service. Opens after 5 failures, half-opens after 60 seconds.
-# payment_api_breaker = create_shared_breaker(service_name="payment_api", fail_max=5, reset_timeout=60)
+        Returns:
+            CircuitBreaker instance for the service.
+        """
+        if service_name in cls._breakers:
+            return cls._breakers[service_name]
 
-# Example: Breaker for a notification service. More sensitive, opens after 3 failures.
-# notification_api_breaker = create_shared_breaker(service_name="notification_api", fail_max=3, reset_timeout=45)
+        breaker = cls._create_breaker(
+            service_name=service_name,
+            fail_max=fail_max or cls._default_fail_max,
+            reset_timeout=reset_timeout or cls._default_reset_timeout,
+        )
+        cls._breakers[service_name] = breaker
+        return breaker
 
-# Add other breakers for other services as needed.
-# another_service_breaker = create_shared_breaker(service_name="another_service", fail_max=10, reset_timeout=120)
+    @classmethod
+    def _create_breaker(
+        cls,
+        service_name: str,
+        fail_max: int,
+        reset_timeout: int,
+    ) -> CircuitBreaker:
+        """Create a new circuit breaker instance."""
+        if cls._redis_client is not None:
+            try:
+                state_storage = CircuitRedisStorage(
+                    redis_client=cls._redis_client,
+                    namespace=f"breaker:{service_name}"
+                )
+                logger.info(f"Created Redis-backed circuit breaker for {service_name}")
+                return CircuitBreaker(
+                    fail_max=fail_max,
+                    reset_timeout=reset_timeout,
+                    state_storage=state_storage
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to create Redis-backed circuit breaker for {service_name}. "
+                    f"Falling back to in-memory. Error: {e}"
+                )
+
+        # Fallback to in-memory circuit breaker
+        logger.info(
+            f"Created in-memory circuit breaker for {service_name}. "
+            "State will not be shared across processes."
+        )
+        return CircuitBreaker(fail_max=fail_max, reset_timeout=reset_timeout)
+
+    @classmethod
+    def reset(cls) -> None:
+        """
+        Reset the registry. Clears all breakers and configuration.
+
+        Useful for testing to ensure clean state between tests.
+        """
+        cls._breakers.clear()
+        cls._redis_client = None
+        cls._redis_url = None
+        cls._default_fail_max = 5
+        cls._default_reset_timeout = 60
+        cls._configured = False
+
+    @classmethod
+    def is_configured(cls) -> bool:
+        """Check if the registry has been configured."""
+        return cls._configured
+
+    @classmethod
+    def get_registered_services(cls) -> Set[str]:
+        """Get the set of service names that have breakers registered."""
+        return set(cls._breakers.keys())

@@ -7,6 +7,7 @@ from urllib.parse import urljoin
 import requests
 from pybreaker import CircuitBreaker
 
+from .circuit_breakers import CircuitBreakerRegistry
 from .behaviors import (
     Behavior,
     CircuitBreakerBehavior,
@@ -54,13 +55,14 @@ class RestClient(Generic[RequestT, ResponseT]):
         retry_status_codes: Optional[Set[int]] = None,
         breaker: Optional[CircuitBreaker] = None,
         interceptors: Optional[List[Interceptor]] = None,
+        use_circuit_breaker: bool = True,
     ):
         """
         Initialize the RestClient with base configuration.
 
         Args:
             base_url: Base URL for all requests
-            service_name: The name of the service, used for logging.
+            service_name: The name of the service, used for logging and circuit breaker registry.
             logger: Logger instance to use for request/response logging
             default_headers: Default headers to include in all requests
             timeout: Request timeout in seconds
@@ -68,8 +70,11 @@ class RestClient(Generic[RequestT, ResponseT]):
             max_retries: Maximum number of retry attempts for transient errors
             retry_backoff_factor: Multiplier for exponential backoff between retry attempts
             retry_status_codes: Set of HTTP status codes that should trigger a retry
-            breaker: An optional, shared circuit breaker instance
+            breaker: An optional circuit breaker instance. If not provided and use_circuit_breaker
+                    is True, one will be obtained from CircuitBreakerRegistry using service_name.
             interceptors: An optional list of interceptors to hook into the request/response cycle.
+            use_circuit_breaker: Whether to use a circuit breaker. If True and no breaker is provided,
+                                one will be obtained from CircuitBreakerRegistry. Default is True.
         """
         self.base_url = base_url.rstrip("/")
         self.service_name = service_name
@@ -77,6 +82,14 @@ class RestClient(Generic[RequestT, ResponseT]):
         self.default_headers = default_headers or {"Content-Type": "application/json"}
         self.timeout = timeout
         self.verify_ssl = verify_ssl
+
+        # Resolve circuit breaker: use provided, get from registry, or None
+        if breaker is not None:
+            resolved_breaker = breaker
+        elif use_circuit_breaker:
+            resolved_breaker = CircuitBreakerRegistry.get(service_name)
+        else:
+            resolved_breaker = None
 
         # Store default behaviors to be configured per-request
         self.default_retry_config = {
@@ -88,7 +101,7 @@ class RestClient(Generic[RequestT, ResponseT]):
         # Build separate pipelines for read and write operations
         pipeline_params = {
             "logger": self.logger,
-            "breaker": breaker,
+            "breaker": resolved_breaker,
             "timeout": self.timeout,
             "verify_ssl": self.verify_ssl,
             "max_retries": max_retries,
@@ -96,10 +109,10 @@ class RestClient(Generic[RequestT, ResponseT]):
             "retry_status_codes": retry_status_codes or {408, 429, 500, 502, 503, 504},
             "interceptors": interceptors,
         }
-        
+
         # Read pipeline: optimized for GET/HEAD
         self.read_pipeline = self.__build_read_pipeline(**pipeline_params)
-        
+
         # Write pipeline: optimized for POST/PUT/PATCH/DELETE with idempotency
         self.write_pipeline = self.__build_write_pipeline(**pipeline_params)
 

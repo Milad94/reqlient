@@ -10,10 +10,10 @@ from pydantic import BaseModel
 
 from reqflow import (
     CircuitBreakerOpenError,
+    CircuitBreakerRegistry,
     Interceptor,
     ResourceNotFoundError,
     RestClient,
-    create_shared_breaker,
 )
 
 
@@ -31,6 +31,14 @@ class CreateUserRequest(BaseModel):
 class TestFullPipeline:
     """Test the complete request pipeline with all behaviors."""
 
+    def setup_method(self):
+        """Reset registry before each test."""
+        CircuitBreakerRegistry.reset()
+
+    def teardown_method(self):
+        """Reset registry after each test."""
+        CircuitBreakerRegistry.reset()
+
     def test_successful_request_with_all_features(self, requests_mock):
         """Test a successful request with all features enabled."""
         requests_mock.get(
@@ -39,7 +47,7 @@ class TestFullPipeline:
             status_code=200,
         )
 
-        breaker = create_shared_breaker(service_name="test", fail_max=5, reset_timeout=5)
+        breaker = CircuitBreakerRegistry.get(service_name="test", fail_max=5, reset_timeout=5)
         logger = MagicMock()
 
         client = RestClient(
@@ -71,7 +79,7 @@ class TestFullPipeline:
             ],
         )
 
-        breaker = create_shared_breaker(service_name="test", fail_max=10, reset_timeout=5)
+        breaker = CircuitBreakerRegistry.get(service_name="test", fail_max=10, reset_timeout=5)
 
         client = RestClient(
             base_url="https://api.example.com/v1",
@@ -91,7 +99,7 @@ class TestFullPipeline:
         """Test that circuit breaker opens after too many failures."""
         requests_mock.get("https://api.example.com/v1/users/1", status_code=500)
 
-        breaker = create_shared_breaker(service_name="test", fail_max=2, reset_timeout=5)
+        breaker = CircuitBreakerRegistry.get(service_name="test", fail_max=2, reset_timeout=5)
 
         client = RestClient(
             base_url="https://api.example.com/v1",
@@ -221,7 +229,7 @@ class TestFullPipeline:
             ],
         )
 
-        breaker = create_shared_breaker(service_name="test", fail_max=5, reset_timeout=5)
+        breaker = CircuitBreakerRegistry.get(service_name="test", fail_max=5, reset_timeout=5)
 
         client = RestClient(
             base_url="https://api.example.com/v1",

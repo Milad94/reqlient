@@ -1,16 +1,12 @@
+import asyncio
 import logging
-import os
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Optional, Set
 
 import redis.asyncio as aioredis
-from dotenv import load_dotenv
-import asyncio
-from ..core.errors import CircuitBreakerOpenError
 
-# Load environment variables from .env file
-load_dotenv()
+from ..core.errors import CircuitBreakerOpenError
 
 logger = logging.getLogger(__name__)
 
@@ -18,35 +14,6 @@ logger = logging.getLogger(__name__)
 CLOSED = "closed"
 OPEN = "open"
 HALF_OPEN = "half_open"
-
-# Redis configuration from environment variables with defaults
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
-REDIS_DB = int(os.getenv("REDIS_DB", "0"))
-
-# Global async Redis client (singleton pattern)
-_async_redis_client = None
-
-
-async def _get_async_redis_client():
-    """Get or create the async Redis client singleton."""
-    global _async_redis_client
-    if _async_redis_client is None:
-        try:
-            _async_redis_client = await aioredis.from_url(
-                f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
-            )
-            await _async_redis_client.ping()
-            logger.info(
-                f"Connected to Redis at {REDIS_HOST}:{REDIS_PORT} for async circuit breaker"
-            )
-        except Exception as e:
-            logger.warning(
-                f"Failed to connect to Redis at {REDIS_HOST}:{REDIS_PORT} for async circuit breaker. "
-                f"Will use in-memory storage. Error: {e}"
-            )
-            _async_redis_client = None
-    return _async_redis_client
 
 
 class AsyncCircuitBreakerStorage(ABC):
@@ -87,7 +54,7 @@ class AsyncInMemoryStorage(AsyncCircuitBreakerStorage):
     def __init__(self, namespace: str):
         self.namespace = namespace
         self._lock = asyncio.Lock()
-        self._state: Dict[str, Any] = {}
+        self._state: dict[str, Any] = {}
 
     def _get_key(self, suffix: str) -> str:
         """Generate a namespaced key."""
@@ -355,43 +322,171 @@ class AsyncCircuitBreaker:
             raise
 
 
-async def create_shared_async_breaker(
-    service_name: str, fail_max: int, reset_timeout: int
-) -> AsyncCircuitBreaker:
+class AsyncCircuitBreakerRegistry:
     """
-    Create an async circuit breaker with Redis storage if available.
+    A registry for managing async circuit breakers across the application.
 
-    Args:
-        service_name: Unique name for the service
-        fail_max: Number of failures before opening circuit
-        reset_timeout: Seconds to wait before trying half-open
+    Configure once at application startup, then breakers are automatically
+    created and shared when AsyncRestClient instances use the same service_name.
 
-    Returns:
-        AsyncCircuitBreaker instance
+    Example:
+        # Configure once at startup (e.g., FastAPI lifespan)
+        await AsyncCircuitBreakerRegistry.configure(
+            redis_url="redis://localhost:6379/0",
+            default_fail_max=5,
+            default_reset_timeout=60
+        )
+
+        # AsyncRestClient automatically gets breaker from registry
+        async with AsyncRestClient(
+            base_url="https://api.example.com",
+            service_name="user_api",  # Breaker auto-resolved
+        ) as client:
+            ...
+
+        # Or get breaker explicitly with custom settings
+        breaker = await AsyncCircuitBreakerRegistry.get("payments", fail_max=3)
     """
-    redis_client = await _get_async_redis_client()
 
-    if redis_client is not None:
-        try:
-            storage = AsyncRedisStorage(redis_client=redis_client, namespace=service_name)
-            logger.info(f"Created Redis-backed async circuit breaker for {service_name}")
-            return AsyncCircuitBreaker(
-                fail_max=fail_max,
-                reset_timeout=reset_timeout,
-                storage=storage,
-                service_name=service_name,
-            )
-        except Exception as e:
-            logger.warning(
-                f"Failed to create Redis-backed async circuit breaker for {service_name}. "
-                f"Falling back to in-memory. Error: {e}"
+    _redis_url: Optional[str] = None
+    _default_fail_max: int = 5
+    _default_reset_timeout: int = 60
+    _breakers: dict[str, AsyncCircuitBreaker] = {}
+    _redis_client: Optional[aioredis.Redis] = None
+    _configured: bool = False
+
+    @classmethod
+    async def configure(
+        cls,
+        redis_url: Optional[str] = None,
+        default_fail_max: int = 5,
+        default_reset_timeout: int = 60,
+    ) -> None:
+        """
+        Configure the async circuit breaker registry.
+
+        Call this once at application startup before creating any AsyncRestClient instances.
+
+        Args:
+            redis_url: Redis URL for shared state (e.g., "redis://localhost:6379/0").
+                      If None, breakers will use in-memory storage (not shared across processes).
+            default_fail_max: Default number of failures before opening circuit.
+            default_reset_timeout: Default seconds to wait before trying half-open.
+        """
+        cls._redis_url = redis_url
+        cls._default_fail_max = default_fail_max
+        cls._default_reset_timeout = default_reset_timeout
+        cls._configured = True
+
+        # Initialize Redis client if URL provided
+        if redis_url:
+            try:
+                cls._redis_client = await aioredis.from_url(redis_url)
+                await cls._redis_client.ping()
+                logger.info(f"AsyncCircuitBreakerRegistry connected to Redis at {redis_url}")
+            except Exception as e:
+                logger.warning(
+                    f"Failed to connect to Redis at {redis_url}. "
+                    f"Circuit breakers will use in-memory storage. Error: {e}"
+                )
+                cls._redis_client = None
+        else:
+            cls._redis_client = None
+            logger.info(
+                "AsyncCircuitBreakerRegistry configured without Redis. "
+                "Circuit breakers will use in-memory storage."
             )
 
-    # Fallback to in-memory
-    logger.info(
-        f"Creating in-memory async circuit breaker for {service_name}. "
-        "State will not be shared across processes."
-    )
-    return AsyncCircuitBreaker(
-        fail_max=fail_max, reset_timeout=reset_timeout, service_name=service_name
-    )
+    @classmethod
+    async def get(
+        cls,
+        service_name: str,
+        fail_max: Optional[int] = None,
+        reset_timeout: Optional[int] = None,
+    ) -> AsyncCircuitBreaker:
+        """
+        Get or create an async circuit breaker for a service.
+
+        If a breaker already exists for the service_name, returns the existing instance.
+        Otherwise, creates a new one with the specified or default settings.
+
+        Args:
+            service_name: Unique name for the service (e.g., "user_api", "payments").
+            fail_max: Number of failures before opening circuit (uses default if None).
+            reset_timeout: Seconds to wait before trying half-open (uses default if None).
+
+        Returns:
+            AsyncCircuitBreaker instance for the service.
+        """
+        if service_name in cls._breakers:
+            return cls._breakers[service_name]
+
+        breaker = cls._create_breaker(
+            service_name=service_name,
+            fail_max=fail_max or cls._default_fail_max,
+            reset_timeout=reset_timeout or cls._default_reset_timeout,
+        )
+        cls._breakers[service_name] = breaker
+        return breaker
+
+    @classmethod
+    def _create_breaker(
+        cls,
+        service_name: str,
+        fail_max: int,
+        reset_timeout: int,
+    ) -> AsyncCircuitBreaker:
+        """Create a new async circuit breaker instance."""
+        if cls._redis_client is not None:
+            try:
+                storage = AsyncRedisStorage(
+                    redis_client=cls._redis_client,
+                    namespace=service_name
+                )
+                logger.info(f"Created Redis-backed async circuit breaker for {service_name}")
+                return AsyncCircuitBreaker(
+                    fail_max=fail_max,
+                    reset_timeout=reset_timeout,
+                    storage=storage,
+                    service_name=service_name,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to create Redis-backed async circuit breaker for {service_name}. "
+                    f"Falling back to in-memory. Error: {e}"
+                )
+
+        # Fallback to in-memory circuit breaker
+        logger.info(
+            f"Created in-memory async circuit breaker for {service_name}. "
+            "State will not be shared across processes."
+        )
+        return AsyncCircuitBreaker(
+            fail_max=fail_max,
+            reset_timeout=reset_timeout,
+            service_name=service_name,
+        )
+
+    @classmethod
+    def reset(cls) -> None:
+        """
+        Reset the registry. Clears all breakers and configuration.
+
+        Useful for testing to ensure clean state between tests.
+        """
+        cls._breakers.clear()
+        cls._redis_client = None
+        cls._redis_url = None
+        cls._default_fail_max = 5
+        cls._default_reset_timeout = 60
+        cls._configured = False
+
+    @classmethod
+    def is_configured(cls) -> bool:
+        """Check if the registry has been configured."""
+        return cls._configured
+
+    @classmethod
+    def get_registered_services(cls) -> Set[str]:
+        """Get the set of service names that have breakers registered."""
+        return set(cls._breakers.keys())

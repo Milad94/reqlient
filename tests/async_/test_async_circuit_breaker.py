@@ -10,8 +10,8 @@ import pytest
 from reqflow.async_.circuit_breakers import (
     CLOSED,
     AsyncCircuitBreaker,
+    AsyncCircuitBreakerRegistry,
     AsyncInMemoryStorage,
-    create_shared_async_breaker,
 )
 from reqflow.core.errors import CircuitBreakerOpenError
 
@@ -151,26 +151,61 @@ class TestAsyncInMemoryStorage:
 
 
 @pytest.mark.asyncio
-class TestCreateSharedAsyncBreaker:
-    """Test create_shared_async_breaker function."""
+class TestAsyncCircuitBreakerRegistry:
+    """Test AsyncCircuitBreakerRegistry class."""
 
-    @patch("reqflow.async_.circuit_breakers._get_async_redis_client")
-    async def test_fallback_to_in_memory_when_redis_unavailable(self, mock_get_redis):
-        """Test that function falls back to in-memory breaker when Redis is unavailable."""
-        mock_get_redis.return_value = None
-        breaker = await create_shared_async_breaker(
-            service_name="test_service", fail_max=3, reset_timeout=5
-        )
+    def setup_method(self):
+        """Reset registry before each test."""
+        AsyncCircuitBreakerRegistry.reset()
+
+    def teardown_method(self):
+        """Reset registry after each test."""
+        AsyncCircuitBreakerRegistry.reset()
+
+    async def test_get_creates_new_breaker(self):
+        """Test that get() creates a new breaker for unknown service."""
+        breaker = await AsyncCircuitBreakerRegistry.get("new_service", fail_max=3, reset_timeout=5)
         assert breaker is not None
         assert isinstance(breaker, AsyncCircuitBreaker)
 
-    @patch("reqflow.async_.circuit_breakers._get_async_redis_client")
-    async def test_creates_redis_breaker_when_available(self, mock_get_redis):
-        """Test that function creates Redis-backed breaker when Redis is available."""
-        mock_redis_client = AsyncMock()
-        mock_get_redis.return_value = mock_redis_client
-        breaker = await create_shared_async_breaker(
-            service_name="test_service", fail_max=3, reset_timeout=5
+    async def test_get_returns_same_breaker_for_same_service(self):
+        """Test that get() returns the same breaker for the same service name."""
+        breaker1 = await AsyncCircuitBreakerRegistry.get("same_service", fail_max=3, reset_timeout=5)
+        breaker2 = await AsyncCircuitBreakerRegistry.get("same_service", fail_max=10, reset_timeout=60)
+        # Should be the exact same instance
+        assert breaker1 is breaker2
+
+    async def test_configure_sets_defaults(self):
+        """Test that configure() sets default values."""
+        await AsyncCircuitBreakerRegistry.configure(
+            default_fail_max=10,
+            default_reset_timeout=120
         )
+        assert AsyncCircuitBreakerRegistry.is_configured()
+
+    async def test_reset_clears_breakers(self):
+        """Test that reset() clears all breakers."""
+        # First add some breakers
+        await AsyncCircuitBreakerRegistry.get("service1")
+        await AsyncCircuitBreakerRegistry.get("service2")
+        assert len(AsyncCircuitBreakerRegistry.get_registered_services()) == 2
+
+        # Reset clears them
+        AsyncCircuitBreakerRegistry.reset()
+        assert len(AsyncCircuitBreakerRegistry.get_registered_services()) == 0
+        assert not AsyncCircuitBreakerRegistry.is_configured()
+
+    async def test_get_registered_services(self):
+        """Test that get_registered_services() returns correct services."""
+        await AsyncCircuitBreakerRegistry.get("service_a")
+        await AsyncCircuitBreakerRegistry.get("service_b")
+
+        services = AsyncCircuitBreakerRegistry.get_registered_services()
+        assert services == {"service_a", "service_b"}
+
+    async def test_fallback_to_in_memory_when_redis_unavailable(self):
+        """Test that registry falls back to in-memory breaker when Redis is unavailable."""
+        AsyncCircuitBreakerRegistry.reset()
+        breaker = await AsyncCircuitBreakerRegistry.get("test_service", fail_max=3, reset_timeout=5)
         assert breaker is not None
         assert isinstance(breaker, AsyncCircuitBreaker)

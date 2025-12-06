@@ -8,7 +8,7 @@ import pytest
 from pybreaker import CircuitBreaker
 
 from reqflow.sync.behaviors import CircuitBreakerBehavior
-from reqflow.sync.circuit_breakers import create_shared_breaker
+from reqflow.sync.circuit_breakers import CircuitBreakerRegistry
 from reqflow.core.errors import CircuitBreakerOpenError, ConnectionError
 from reqflow.core.request_response import RequestContext, ResponseContext
 
@@ -142,36 +142,60 @@ class TestCircuitBreakerBehavior:
             behavior.handle(request)
 
 
-class TestCreateSharedBreaker:
-    """Test create_shared_breaker function."""
+class TestCircuitBreakerRegistry:
+    """Test CircuitBreakerRegistry class."""
 
-    @patch("reqflow.sync.circuit_breakers.redis_client", None)
+    def setup_method(self):
+        """Reset registry before each test."""
+        CircuitBreakerRegistry.reset()
+
+    def teardown_method(self):
+        """Reset registry after each test."""
+        CircuitBreakerRegistry.reset()
+
+    def test_get_creates_new_breaker(self):
+        """Test that get() creates a new breaker for unknown service."""
+        breaker = CircuitBreakerRegistry.get("new_service", fail_max=3, reset_timeout=5)
+        assert breaker is not None
+        assert isinstance(breaker, CircuitBreaker)
+
+    def test_get_returns_same_breaker_for_same_service(self):
+        """Test that get() returns the same breaker for the same service name."""
+        breaker1 = CircuitBreakerRegistry.get("same_service", fail_max=3, reset_timeout=5)
+        breaker2 = CircuitBreakerRegistry.get("same_service", fail_max=10, reset_timeout=60)
+        # Should be the exact same instance
+        assert breaker1 is breaker2
+
+    def test_configure_sets_defaults(self):
+        """Test that configure() sets default values."""
+        CircuitBreakerRegistry.configure(
+            default_fail_max=10,
+            default_reset_timeout=120
+        )
+        assert CircuitBreakerRegistry.is_configured()
+
+    def test_reset_clears_breakers(self):
+        """Test that reset() clears all breakers."""
+        CircuitBreakerRegistry.get("service1")
+        CircuitBreakerRegistry.get("service2")
+        assert len(CircuitBreakerRegistry.get_registered_services()) == 2
+
+        CircuitBreakerRegistry.reset()
+        assert len(CircuitBreakerRegistry.get_registered_services()) == 0
+        assert not CircuitBreakerRegistry.is_configured()
+
+    def test_get_registered_services(self):
+        """Test that get_registered_services() returns correct services."""
+        CircuitBreakerRegistry.get("service_a")
+        CircuitBreakerRegistry.get("service_b")
+
+        services = CircuitBreakerRegistry.get_registered_services()
+        assert services == {"service_a", "service_b"}
+
+    @patch.object(CircuitBreakerRegistry, "_redis_client", None)
     def test_fallback_to_in_memory_when_redis_unavailable(self):
-        """Test that function falls back to in-memory breaker when Redis is unavailable."""
-        breaker = create_shared_breaker(service_name="test_service", fail_max=3, reset_timeout=5)
-        assert breaker is not None
-        assert isinstance(breaker, CircuitBreaker)
-
-    @patch("reqflow.sync.circuit_breakers.redis_client")
-    @patch("reqflow.sync.circuit_breakers.CircuitRedisStorage")
-    def test_creates_redis_breaker_when_available(self, mock_redis_storage, mock_redis_client):
-        """Test that function creates Redis-backed breaker when Redis is available."""
-        mock_storage = MagicMock()
-        mock_redis_storage.return_value = mock_storage
-
-        breaker = create_shared_breaker(service_name="test_service", fail_max=3, reset_timeout=5)
-
-        assert breaker is not None
-        assert isinstance(breaker, CircuitBreaker)
-        mock_redis_storage.assert_called_once()
-
-    @patch("reqflow.sync.circuit_breakers.redis_client")
-    @patch("reqflow.sync.circuit_breakers.CircuitRedisStorage")
-    def test_handles_redis_creation_error(self, mock_redis_storage, mock_redis_client):
-        """Test that function handles Redis creation errors gracefully."""
-        mock_redis_storage.side_effect = Exception("Redis error")
-
-        # Should fall back to in-memory breaker
-        breaker = create_shared_breaker(service_name="test_service", fail_max=3, reset_timeout=5)
+        """Test that registry falls back to in-memory breaker when Redis is unavailable."""
+        CircuitBreakerRegistry.reset()
+        breaker = CircuitBreakerRegistry.get("test_service", fail_max=3, reset_timeout=5)
         assert breaker is not None
         assert isinstance(breaker, CircuitBreaker)

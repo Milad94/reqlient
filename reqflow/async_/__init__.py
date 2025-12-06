@@ -1,12 +1,12 @@
 """Asynchronous REST client modules."""
 
-from .circuit_breakers import AsyncCircuitBreaker, create_shared_async_breaker
+from .circuit_breakers import AsyncCircuitBreaker, AsyncCircuitBreakerRegistry
 from .interceptors import AsyncInterceptor
 from .rest_client import AsyncRestClient
 
 __all__ = [
     "AsyncRestClient",
     "AsyncCircuitBreaker",
-    "create_shared_async_breaker",
+    "AsyncCircuitBreakerRegistry",
     "AsyncInterceptor",
 ]
