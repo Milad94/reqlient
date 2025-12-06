@@ -2,8 +2,8 @@
 Comprehensive tests for interceptors.
 """
 
-from reqflow.sync.interceptors import Interceptor
-from reqflow.core.request_response import RequestContext, ResponseContext
+from reqlient.sync.interceptors import Interceptor
+from reqlient.core.request_response import RequestContext, ResponseContext
 
 
 class TestInterceptor:

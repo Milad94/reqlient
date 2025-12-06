@@ -4,7 +4,7 @@ Comprehensive tests for error handling and error context.
 
 from datetime import datetime
 
-from reqflow.core.errors import (
+from reqlient.core.errors import (
     AuthenticationError,
     AuthorizationError,
     ConnectionError,
@@ -19,7 +19,7 @@ from reqflow.core.errors import (
     StatusCodeError,
     TimeoutError,
 )
-from reqflow.core.request_response import RequestContext, ResponseContext
+from reqlient.core.request_response import RequestContext, ResponseContext
 
 
 class TestErrorContext:

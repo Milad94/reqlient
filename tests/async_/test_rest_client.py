@@ -8,9 +8,9 @@ import httpx
 import pytest
 from pydantic import BaseModel
 
-from reqflow import AsyncRestClient
-from reqflow.async_.circuit_breakers import AsyncCircuitBreaker
-from reqflow.core.errors import (
+from reqlient import AsyncRestClient
+from reqlient.async_.circuit_breakers import AsyncCircuitBreaker
+from reqlient.core.errors import (
     AuthenticationError,
     AuthorizationError,
     CircuitBreakerOpenError,

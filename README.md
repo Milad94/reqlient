@@ -1,4 +1,4 @@
-# reqflow: A Resilient HTTP Client
+# reqlient: A Resilient HTTP Client
 
 A production-grade, extensible, and resilient HTTP client for Python, designed for reliable communication with external REST APIs.
 
@@ -50,20 +50,20 @@ This module provides a `RestClient` that abstracts away the complexities of API 
 
 ```bash
 # Basic installation
-pip install reqflow
+pip install reqlient
 
 # With async support
-pip install reqflow[async]
+pip install reqlient[async]
 
 # With all optional dependencies
-pip install reqflow[all]
+pip install reqlient[all]
 ```
 
 Or using `uv`:
 
 ```bash
-uv add reqflow
-uv add reqflow[async]  # For async support
+uv add reqlient
+uv add reqlient[async]  # For async support
 ```
 
 ---
@@ -151,11 +151,11 @@ Run `just` or `just help` to see all available commands:
 ### Project Structure
 
 ```
-reqflow/
+reqlient/
 ├── pyproject.toml          # Project configuration (PEP 621)
 ├── uv.lock                 # Locked dependencies (uv)
 ├── Justfile                # Task runner commands
-├── reqflow/                # Source code
+├── reqlient/               # Source code
 │   ├── __init__.py         # Main exports
 │   ├── core/               # Shared modules
 │   │   ├── errors.py       # Error types
@@ -214,7 +214,7 @@ Configure the circuit breaker registry once at application startup. This enables
 
 ```python
 # in your_app/config.py (or Django settings.py, FastAPI lifespan, etc.)
-from reqflow import CircuitBreakerRegistry
+from reqlient import CircuitBreakerRegistry
 
 # Configure once at startup - Redis enables shared state across processes
 CircuitBreakerRegistry.configure(
@@ -230,7 +230,7 @@ Create client instances - circuit breakers are automatically managed by the regi
 
 ```python
 # in your_app/clients.py
-from reqflow import RestClient
+from reqlient import RestClient
 
 # Circuit breaker is automatically created/shared via the registry
 user_service_client = RestClient(
@@ -248,7 +248,7 @@ Now, use your client instance to make a type-safe HTTP request. If the circuit b
 # in your_app/services.py
 from .clients import user_service_client
 from .schemas import User
-from reqflow import ResourceNotFoundError, RestClientError, CircuitBreakerOpenError
+from reqlient import ResourceNotFoundError, RestClientError, CircuitBreakerOpenError
 
 def get_user_by_id(user_id: int) -> User | None:
     """Fetches a user and handles potential API errors."""
@@ -285,14 +285,14 @@ reqflow also provides full async support using `httpx` and native async/await pa
 ### Installation
 
 ```bash
-pip install reqflow[async]
+pip install reqlient[async]
 ```
 
 ### Basic Async Usage
 
 ```python
 import asyncio
-from reqflow import AsyncRestClient, AsyncCircuitBreakerRegistry
+from reqlient import AsyncRestClient, AsyncCircuitBreakerRegistry
 from pydantic import BaseModel
 
 class User(BaseModel):
@@ -440,7 +440,7 @@ The **Circuit Breaker** is a critical pattern for building resilient application
 
 ```python
 # Configure the registry once at application startup
-from reqflow import CircuitBreakerRegistry, RestClient
+from reqlient import CircuitBreakerRegistry, RestClient
 
 # Redis enables shared state across all processes and servers
 CircuitBreakerRegistry.configure(
@@ -505,7 +505,7 @@ Interceptors are powerful hooks for adding custom logic. For example, injecting 
 **1. Create the Interceptor:**
 ```python
 # in your_app/interceptors.py
-from reqflow import Interceptor, RequestContext, ResponseContext, RestClientError
+from reqlient import Interceptor, RequestContext, ResponseContext, RestClientError
 
 class LoggingInterceptor(Interceptor):
     def on_before_request(self, request: RequestContext):
@@ -564,7 +564,7 @@ This class will contain the `RestClient` and expose methods for specific API ope
 
 ```python
 # in your_app/user_service/client.py
-from reqflow import RestClient
+from reqlient import RestClient
 from .schemas import UsersResponse, User, CreateUserRequest
 
 class UserServiceClient:
@@ -603,7 +603,7 @@ In your application's setup, create the generic `RestClient` and inject it into 
 
 ```python
 # in your_app/main.py or services.py
-from reqflow import RestClient, RestClientError
+from reqlient import RestClient, RestClientError
 from .user_service.client import UserServiceClient
 
 # 1. Create the generic RestClient for User Service (with breaker, etc.)
@@ -794,7 +794,7 @@ just build-wheel
 The async circuit breaker registry works similarly to the sync version but uses async Redis operations:
 
 ```python
-from reqflow import AsyncCircuitBreakerRegistry, AsyncRestClient
+from reqlient import AsyncCircuitBreakerRegistry, AsyncRestClient
 
 # Configure registry once at startup (e.g., in FastAPI lifespan)
 await AsyncCircuitBreakerRegistry.configure(
@@ -817,7 +817,7 @@ async with AsyncRestClient(
 Create async interceptors for custom logic:
 
 ```python
-from reqflow import AsyncInterceptor, RequestContext, ResponseContext, RestClientError
+from reqlient import AsyncInterceptor, RequestContext, ResponseContext, RestClientError
 
 class LoggingInterceptor(AsyncInterceptor):
     async def on_before_request(self, request: RequestContext):
@@ -858,7 +858,7 @@ async with AsyncRestClient(
 The client raises specific exceptions, allowing for fine-grained error handling.
 
 ```python
-from reqflow import RateLimitError, ServerError, RestClientError, CircuitBreakerOpenError
+from reqlient import RateLimitError, ServerError, RestClientError, CircuitBreakerOpenError
 
 try:
     # ... make a request ...

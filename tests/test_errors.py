@@ -4,7 +4,7 @@ Comprehensive tests for error handling and error context.
 
 from datetime import datetime
 
-from reqflow import (
+from reqlient import (
     AuthenticationError,
     AuthorizationError,
     ConnectionError,

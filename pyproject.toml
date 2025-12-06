@@ -3,14 +3,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "reqflow"
-version = "0.1.0"
+name = "reqlient"
+version = "0.1.1"
 description = "A production-grade, extensible, and resilient HTTP client for Python"
 readme = "README.md"
 requires-python = ">=3.12"
 license = {text = "MIT"}
 authors = [
-    {name = "reqflow contributors"}
+    {name = "reqlient contributors"}
 ]
 keywords = ["http", "client", "rest", "api", "retry", "circuit-breaker", "resilience"]
 classifiers = [
@@ -48,7 +48,7 @@ async = [
     "httpx>=0.28.1",
 ]
 all = [
-    "reqflow[dev,redis,async]",
+    "reqlient[dev,redis,async]",
 ]
 
 [tool.uv]
@@ -66,10 +66,10 @@ dev-dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/reqflow"
-Documentation = "https://github.com/yourusername/reqflow#readme"
-Repository = "https://github.com/yourusername/reqflow"
-Issues = "https://github.com/yourusername/reqflow/issues"
+Homepage = "https://github.com/MiladSJ/reqlient"
+Documentation = "https://github.com/MiladSJ/reqlient#readme"
+Repository = "https://github.com/MiladSJ/reqlient"
+Issues = "https://github.com/MiladSJ/reqlient/issues"
 
 [tool.ruff]
 line-length = 100
@@ -132,7 +132,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["reqflow"]
+source = ["reqlient"]
 omit = [
     "*/tests/*",
     "*/test_*.py",
@@ -151,11 +151,11 @@ exclude_lines = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["reqflow"]
+packages = ["reqlient"]
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "/reqflow",
+    "/reqlient",
     "/tests",
     "/*.py",
     "/pyproject.toml",

@@ -4,8 +4,8 @@ Comprehensive tests for async interceptors.
 
 import pytest
 
-from reqflow.async_.interceptors import AsyncInterceptor
-from reqflow.core.request_response import RequestContext, ResponseContext
+from reqlient.async_.interceptors import AsyncInterceptor
+from reqlient.core.request_response import RequestContext, ResponseContext
 
 
 @pytest.mark.asyncio

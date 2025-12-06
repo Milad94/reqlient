@@ -1,5 +1,5 @@
 """
-Pytest configuration and shared fixtures for reqflow tests.
+Pytest configuration and shared fixtures for reqlient tests.
 """
 
 import logging
@@ -9,9 +9,9 @@ import pytest
 import requests_mock as requests_mock_module
 from pydantic import BaseModel
 
-from reqflow.sync.circuit_breakers import CircuitBreakerRegistry
-from reqflow.async_.circuit_breakers import AsyncCircuitBreakerRegistry
-from reqflow.sync.rest_client import RestClient
+from reqlient.sync.circuit_breakers import CircuitBreakerRegistry
+from reqlient.async_.circuit_breakers import AsyncCircuitBreakerRegistry
+from reqlient.sync.rest_client import RestClient
 
 # Disable logging during tests unless explicitly needed
 logging.getLogger().setLevel(logging.CRITICAL)

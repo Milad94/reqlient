@@ -1,5 +1,5 @@
 """
-reqflow - A resilient HTTP client library for Python.
+reqlient - A resilient HTTP client library for Python.
 
 A production-grade, extensible, and resilient HTTP client for Python,
 designed for reliable communication with external REST APIs.
@@ -71,4 +71,4 @@ __all__ = [
     "ResponseContext",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"

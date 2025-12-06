@@ -9,7 +9,7 @@ import pytest
 import requests
 from pydantic import BaseModel, ValidationError
 
-from reqflow.core.errors import (
+from reqlient.core.errors import (
     AuthenticationError,
     AuthorizationError,
     ConnectionError,
@@ -18,7 +18,7 @@ from reqflow.core.errors import (
     StatusCodeError,
     TimeoutError,
 )
-from reqflow.sync.rest_client import RestClient
+from reqlient.sync.rest_client import RestClient
 
 
 class User(BaseModel):
@@ -269,7 +269,7 @@ class TestRestClientPost:
         # If request validation fails, it should raise RequestValidationError
         # But Pydantic will validate at model creation, so we need to test differently
         # Response validation will fail because {"id": 1} doesn't match UserResponse
-        from reqflow.core.errors import ResponseValidationError
+        from reqlient.core.errors import ResponseValidationError
 
         with pytest.raises(ResponseValidationError):
             basic_client.post(
@@ -282,7 +282,7 @@ class TestRestClientPost:
             "https://api.example.com/v1/users", json={"invalid": "data"}, status_code=201
         )
 
-        from reqflow.core.errors import ResponseValidationError
+        from reqlient.core.errors import ResponseValidationError
 
         with pytest.raises(ResponseValidationError):
             basic_client.post(

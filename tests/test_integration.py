@@ -8,7 +8,7 @@ import pytest
 import requests
 from pydantic import BaseModel
 
-from reqflow import (
+from reqlient import (
     CircuitBreakerOpenError,
     CircuitBreakerRegistry,
     Interceptor,
@@ -208,7 +208,7 @@ class TestFullPipeline:
         )
 
         # Should raise ResponseValidationError without retrying
-        from reqflow.core.errors import ResponseValidationError
+        from reqlient.core.errors import ResponseValidationError
 
         with pytest.raises(ResponseValidationError):
             client.get("/users/1", response_data_schema=User)

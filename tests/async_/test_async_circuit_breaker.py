@@ -7,13 +7,13 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from reqflow.async_.circuit_breakers import (
+from reqlient.async_.circuit_breakers import (
     CLOSED,
     AsyncCircuitBreaker,
     AsyncCircuitBreakerRegistry,
     AsyncInMemoryStorage,
 )
-from reqflow.core.errors import CircuitBreakerOpenError
+from reqlient.core.errors import CircuitBreakerOpenError
 
 
 @pytest.mark.asyncio

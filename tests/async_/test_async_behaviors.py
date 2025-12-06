@@ -8,7 +8,7 @@ import httpx
 import pytest
 from pydantic import BaseModel
 
-from reqflow.async_.behaviors import (
+from reqlient.async_.behaviors import (
     AsyncHttpBehavior,
     AsyncIdempotencyHeaderBehavior,
     AsyncInterceptorBehavior,
@@ -18,8 +18,8 @@ from reqflow.async_.behaviors import (
     AsyncRetryBehavior,
     AsyncStatusCodeValidationBehavior,
 )
-from reqflow.async_.interceptors import AsyncInterceptor
-from reqflow.core.errors import (
+from reqlient.async_.interceptors import AsyncInterceptor
+from reqlient.core.errors import (
     AuthenticationError,
     ConnectionError,
     RequestValidationError,
@@ -27,7 +27,7 @@ from reqflow.core.errors import (
     ResponseValidationError,
     TimeoutError,
 )
-from reqflow.core.request_response import RequestContext, ResponseContext
+from reqlient.core.request_response import RequestContext, ResponseContext
 
 
 class User(BaseModel):

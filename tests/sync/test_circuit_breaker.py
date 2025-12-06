@@ -7,10 +7,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pybreaker import CircuitBreaker
 
-from reqflow.sync.behaviors import CircuitBreakerBehavior
-from reqflow.sync.circuit_breakers import CircuitBreakerRegistry
-from reqflow.core.errors import CircuitBreakerOpenError, ConnectionError
-from reqflow.core.request_response import RequestContext, ResponseContext
+from reqlient.sync.behaviors import CircuitBreakerBehavior
+from reqlient.sync.circuit_breakers import CircuitBreakerRegistry
+from reqlient.core.errors import CircuitBreakerOpenError, ConnectionError
+from reqlient.core.request_response import RequestContext, ResponseContext
 
 
 class TestCircuitBreakerBehavior:
@@ -50,7 +50,7 @@ class TestCircuitBreakerBehavior:
         """Test that circuit opens after too many failures."""
         breaker = CircuitBreaker(fail_max=2, reset_timeout=5)
         mock_next = MagicMock()
-        from reqflow.core.errors import ConnectionError as CustomConnectionError
+        from reqlient.core.errors import ConnectionError as CustomConnectionError
 
         error = CustomConnectionError("Connection failed", context=None)
         mock_next.handle.side_effect = error
@@ -88,7 +88,7 @@ class TestCircuitBreakerBehavior:
         """Test that CircuitBreakerOpenError is raised when circuit is open."""
         breaker = CircuitBreaker(fail_max=1, reset_timeout=5)
         mock_next = MagicMock()
-        from reqflow.core.errors import ConnectionError as CustomConnectionError
+        from reqlient.core.errors import ConnectionError as CustomConnectionError
 
         error = CustomConnectionError("Connection failed", context=None)
         mock_next.handle.side_effect = error
@@ -124,7 +124,7 @@ class TestCircuitBreakerBehavior:
         """Test that retryable errors are re-raised."""
         breaker = CircuitBreaker(fail_max=3, reset_timeout=5)
         mock_next = MagicMock()
-        from reqflow.core.errors import ConnectionError as CustomConnectionError
+        from reqlient.core.errors import ConnectionError as CustomConnectionError
 
         error = CustomConnectionError("Connection failed", context=None)
         mock_next.handle.side_effect = error
