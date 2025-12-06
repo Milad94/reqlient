@@ -10,6 +10,7 @@ import requests_mock as requests_mock_module
 from pydantic import BaseModel
 
 from reqflow.sync.circuit_breakers import CircuitBreakerRegistry
+from reqflow.async_.circuit_breakers import AsyncCircuitBreakerRegistry
 from reqflow.sync.rest_client import RestClient
 
 # Disable logging during tests unless explicitly needed
@@ -119,3 +120,14 @@ def mock_metrics_service(monkeypatch):
     sys.modules["apps.utility.monitoring.monitoring_service"] = mock_module
 
     return mock_service
+
+
+@pytest.fixture(autouse=True)
+def reset_circuit_breaker_registries():
+    """Reset both sync and async circuit breaker registries before each test."""
+    CircuitBreakerRegistry.reset()
+    AsyncCircuitBreakerRegistry.reset()
+    yield
+    # Also reset after test to ensure clean state
+    CircuitBreakerRegistry.reset()
+    AsyncCircuitBreakerRegistry.reset()

@@ -78,7 +78,7 @@ class RestClient(Generic[RequestT, ResponseT]):
         """
         self.base_url = base_url.rstrip("/")
         self.service_name = service_name
-        self.logger = logger
+        self.logger = logger or logging.getLogger(__name__)
         self.default_headers = default_headers or {"Content-Type": "application/json"}
         self.timeout = timeout
         self.verify_ssl = verify_ssl

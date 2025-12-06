@@ -258,9 +258,6 @@ class AsyncCircuitBreaker:
                 logger.info(
                     f"Circuit breaker for {self.service_name} closed after successful request"
                 )
-            elif state == CLOSED:
-                # Reset failure count on success in closed state
-                await self._reset_failure_count()
 
     async def _record_failure(self):
         """Record a failed request."""

@@ -1,4 +1,5 @@
 import logging
+import threading
 from typing import Optional, Set
 
 import redis
@@ -38,6 +39,7 @@ class CircuitBreakerRegistry:
     _breakers: dict[str, CircuitBreaker] = {}
     _redis_client: Optional[redis.Redis] = None
     _configured: bool = False
+    _lock: threading.Lock = threading.Lock()
 
     @classmethod
     def configure(
@@ -102,16 +104,17 @@ class CircuitBreakerRegistry:
         Returns:
             CircuitBreaker instance for the service.
         """
-        if service_name in cls._breakers:
-            return cls._breakers[service_name]
+        with cls._lock:
+            if service_name in cls._breakers:
+                return cls._breakers[service_name]
 
-        breaker = cls._create_breaker(
-            service_name=service_name,
-            fail_max=fail_max or cls._default_fail_max,
-            reset_timeout=reset_timeout or cls._default_reset_timeout,
-        )
-        cls._breakers[service_name] = breaker
-        return breaker
+            breaker = cls._create_breaker(
+                service_name=service_name,
+                fail_max=fail_max or cls._default_fail_max,
+                reset_timeout=reset_timeout or cls._default_reset_timeout,
+            )
+            cls._breakers[service_name] = breaker
+            return breaker
 
     @classmethod
     def _create_breaker(
@@ -153,12 +156,13 @@ class CircuitBreakerRegistry:
 
         Useful for testing to ensure clean state between tests.
         """
-        cls._breakers.clear()
-        cls._redis_client = None
-        cls._redis_url = None
-        cls._default_fail_max = 5
-        cls._default_reset_timeout = 60
-        cls._configured = False
+        with cls._lock:
+            cls._breakers.clear()
+            cls._redis_client = None
+            cls._redis_url = None
+            cls._default_fail_max = 5
+            cls._default_reset_timeout = 60
+            cls._configured = False
 
     @classmethod
     def is_configured(cls) -> bool:

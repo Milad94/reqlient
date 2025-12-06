@@ -192,11 +192,15 @@ class RetryBehavior(Behavior):
 
     def handle(self, request: RequestContext) -> ResponseContext:
         """Retry the request if it fails with a retryable error."""
-        # Allow per-request override of max_retries
+        # Allow per-request override of max_retries and backoff_factor
         max_retries = request.context.get("max_retries") if request.context else None
         if max_retries is None:
             max_retries = self.max_retries
-        
+
+        backoff_factor = request.context.get("retry_backoff_factor") if request.context else None
+        if backoff_factor is None:
+            backoff_factor = self.backoff_factor
+
         retry_count = 0
         last_error = None
 
@@ -219,7 +223,7 @@ class RetryBehavior(Behavior):
                         )
                     # Increment retry count and wait before retrying
                     retry_count += 1
-                    wait_time = self.backoff_factor * (2 ** (retry_count - 1))
+                    wait_time = backoff_factor * (2 ** (retry_count - 1))
                     time.sleep(wait_time)
                     continue
 
@@ -238,7 +242,7 @@ class RetryBehavior(Behavior):
                     # Max retries exceeded, re-raise the last error
                     break
                 retry_count += 1
-                wait_time = self.backoff_factor * (2 ** (retry_count - 1))
+                wait_time = backoff_factor * (2 ** (retry_count - 1))
                 time.sleep(wait_time)
                 continue
 
@@ -253,8 +257,8 @@ class IdempotencyHeaderBehavior(Behavior):
     """Behavior for adding idempotency headers to POST/PUT/DELETE requests."""
 
     def handle(self, request: RequestContext) -> ResponseContext:
-        """Add X-Idempotency-Key header for POST/PUT/DELETE requests if not present."""
-        if request.method in ["POST", "PUT", "DELETE"]:
+        """Add X-Idempotency-Key header for POST/PUT/PATCH/DELETE requests if not present."""
+        if request.method in ["POST", "PUT", "PATCH", "DELETE"]:
             if "X-Idempotency-Key" not in request.headers:
                 request.headers["X-Idempotency-Key"] = str(uuid.uuid4())
         
