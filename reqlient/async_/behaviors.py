@@ -280,7 +280,6 @@ class AsyncHttpBehavior(AsyncBehavior):
                 params=request.params,
                 headers=request.headers,
                 timeout=self.timeout,
-                verify=self.verify_ssl,
             )
 
             response_data: Optional[Dict[str, Any]] = None
