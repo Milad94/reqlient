@@ -3,9 +3,10 @@ import time
 import uuid
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Any, Dict, Generic, List, Optional, Set, Type
+from typing import Any, Dict, Generic, List, Optional, Set, Type, get_origin
 
 import requests
+from pydantic import TypeAdapter
 from pybreaker import CircuitBreaker
 from pybreaker import CircuitBreakerError as PybreakerError
 
@@ -131,8 +132,18 @@ class RequestValidationBehavior(Behavior):
                 if not isinstance(request_data_schema, TypeVar):
                     try:
                         # Validate the outgoing request data
-                        validated_data = request_data_schema.model_validate(request.data)
-                        request.data = validated_data.model_dump(by_alias=True)
+                        # Use TypeAdapter for generic types (e.g., list[Model]) or regular models
+                        if get_origin(request_data_schema) is not None or not hasattr(
+                            request_data_schema, "model_validate"
+                        ):
+                            # Generic type like list[Model] - use TypeAdapter
+                            adapter = TypeAdapter(request_data_schema)
+                            validated_data = adapter.validate_python(request.data)
+                            request.data = adapter.dump_python(validated_data, by_alias=True)
+                        else:
+                            # Regular Pydantic model
+                            validated_data = request_data_schema.model_validate(request.data)
+                            request.data = validated_data.model_dump(by_alias=True)
                     except Exception as e:
                         error_context = _create_error_context(request, e)
                         raise RequestValidationError(
@@ -164,8 +175,18 @@ class ResponseValidationBehavior(Behavior):
 
                 if not isinstance(response_data_schema, TypeVar):
                     try:
-                        validated_response = response_data_schema.model_validate(response.data)
-                        response.data = validated_response.model_dump(by_alias=True)
+                        # Use TypeAdapter for generic types (e.g., list[Model]) or regular models
+                        if get_origin(response_data_schema) is not None or not hasattr(
+                            response_data_schema, "model_validate"
+                        ):
+                            # Generic type like list[Model] - use TypeAdapter
+                            adapter = TypeAdapter(response_data_schema)
+                            validated_response = adapter.validate_python(response.data)
+                            response.data = adapter.dump_python(validated_response, by_alias=True)
+                        else:
+                            # Regular Pydantic model
+                            validated_response = response_data_schema.model_validate(response.data)
+                            response.data = validated_response.model_dump(by_alias=True)
                     except Exception as e:
                         error_context = _create_error_context(request, e, response)
                         raise ResponseValidationError(
