@@ -1,10 +1,11 @@
 import logging
 import threading
 from datetime import datetime
-from typing import Generic, List, Optional, Set, Type, Union
+from typing import Generic, List, Optional, Set, Type, Union, get_origin
 from urllib.parse import urljoin
 
 import requests
+from pydantic import TypeAdapter
 from pybreaker import CircuitBreaker
 
 from .circuit_breakers import CircuitBreakerRegistry
@@ -341,6 +342,12 @@ class RestClient(Generic[RequestT, ResponseT]):
             # If data is None (e.g., 204), return None. Otherwise, construct the Pydantic model.
             if response_context.data is None:
                 return None
+            # Use TypeAdapter for generic types (e.g., list[Model]) or regular models
+            if get_origin(response_data_schema) is not None or not hasattr(
+                response_data_schema, "model_validate"
+            ):
+                adapter = TypeAdapter(response_data_schema)
+                return adapter.validate_python(response_context.data)
             return response_data_schema.model_validate(response_context.data)
 
         except RestClientError as e:

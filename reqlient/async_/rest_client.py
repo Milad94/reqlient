@@ -1,9 +1,10 @@
 import logging
 from datetime import datetime
-from typing import Generic, List, Optional, Set, Type
+from typing import Generic, List, Optional, Set, Type, get_origin
 from urllib.parse import urljoin
 
 import httpx
+from pydantic import TypeAdapter
 
 from .behaviors import (
     AsyncBehavior,
@@ -390,6 +391,12 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
             if response_context.data is None:
                 return None
             # Response data is already validated by ValidationBehavior, just construct the model
+            # Use TypeAdapter for generic types (e.g., list[Model]) or regular models
+            if get_origin(response_data_schema) is not None or not hasattr(
+                response_data_schema, "model_validate"
+            ):
+                adapter = TypeAdapter(response_data_schema)
+                return adapter.validate_python(response_context.data)
             return response_data_schema.model_validate(response_context.data)
 
         except RestClientError as e:
