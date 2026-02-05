@@ -136,11 +136,11 @@ class AsyncRequestDataSchemaValidationBehavior(AsyncBehavior):
                             # Generic type like list[Model] - use TypeAdapter
                             adapter = TypeAdapter(request_data_schema)
                             validated_data = adapter.validate_python(request.data)
-                            request.data = adapter.dump_python(validated_data, by_alias=True)
+                            request.data = adapter.dump_python(validated_data, by_alias=True, mode='json')
                         else:
                             # Regular Pydantic model
                             validated_data = request_data_schema.model_validate(request.data)
-                            request.data = validated_data.model_dump(by_alias=True)
+                            request.data = validated_data.model_dump(by_alias=True, mode='json')
                     except Exception as e:
                         error_context = _create_error_context(request, e)
                         raise RequestValidationError(
