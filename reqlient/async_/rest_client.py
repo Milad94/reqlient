@@ -360,7 +360,7 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
         request_data_dict = None
         request_data_schema = None
         if request_data is not None:
-            request_data_dict = request_data.model_dump(by_alias=True)
+            request_data_dict = request_data.model_dump(by_alias=True, mode='json')
             request_data_schema = type(request_data)
 
         request_context = RequestContext(

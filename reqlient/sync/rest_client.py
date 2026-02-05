@@ -320,7 +320,7 @@ class RestClient(Generic[RequestT, ResponseT]):
             url=url,
             headers=final_headers,
             params=params,
-            data=request_data.model_dump(by_alias=True) if request_data else None,
+            data=request_data.model_dump(by_alias=True, mode='json') if request_data else None,
             context={
                 "max_retries": max_retries,
                 "retry_backoff_factor": retry_backoff_factor,
