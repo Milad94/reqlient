@@ -6,7 +6,7 @@ from typing import Any, Callable, Optional, Set
 
 import redis.asyncio as aioredis
 
-from ..core.errors import CircuitBreakerOpenError
+from ..core.errors import CircuitBreakerOpenError, RetryableError
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +194,7 @@ class AsyncCircuitBreaker:
         reset_timeout: int = 60,
         storage: Optional[AsyncCircuitBreakerStorage] = None,
         service_name: str = "default",
+        exclude: Optional[tuple[type[Exception], ...]] = None,
     ):
         """
         Initialize async circuit breaker.
@@ -203,11 +204,14 @@ class AsyncCircuitBreaker:
             reset_timeout: Seconds to wait before trying half-open
             storage: Storage backend (if None, uses in-memory)
             service_name: Name of the service (for namespacing)
+            exclude: Exception types that should NOT count as failures.
+                     If None, only RetryableError subclasses trip the breaker.
         """
         self.fail_max = fail_max
         self.reset_timeout = reset_timeout
         self.service_name = service_name
         self.storage = storage or AsyncInMemoryStorage(namespace=service_name)
+        self.exclude = exclude
         self._lock = asyncio.Lock()
 
     async def _get_state(self) -> str:
@@ -284,6 +288,18 @@ class AsyncCircuitBreaker:
                         f"Circuit breaker for {self.service_name} opened after {count} failures"
                     )
 
+    def _should_count_as_failure(self, exc: Exception) -> bool:
+        """Determine if an exception should count as a circuit breaker failure.
+
+        If exclude is set, any exception matching those types is NOT a failure.
+        Otherwise, only RetryableError subclasses (ConnectionError, TimeoutError,
+        ServerError, RateLimitError) count as failures — client errors like
+        StatusCodeError, AuthenticationError, etc. are ignored.
+        """
+        if self.exclude is not None:
+            return not isinstance(exc, self.exclude)
+        return isinstance(exc, RetryableError)
+
     async def call_async(self, func: Callable, *args, **kwargs) -> Any:
         """
         Call an async function with circuit breaker protection.
@@ -314,8 +330,9 @@ class AsyncCircuitBreaker:
             result = await func(*args, **kwargs)
             await self._record_success()
             return result
-        except Exception:
-            await self._record_failure()
+        except Exception as e:
+            if self._should_count_as_failure(e):
+                await self._record_failure()
             raise
 
 

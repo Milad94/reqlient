@@ -13,7 +13,13 @@ from reqlient.async_.circuit_breakers import (
     AsyncCircuitBreakerRegistry,
     AsyncInMemoryStorage,
 )
-from reqlient.core.errors import CircuitBreakerOpenError
+from reqlient.core.errors import (
+    AuthenticationError,
+    CircuitBreakerOpenError,
+    ServerError,
+    StatusCodeError,
+)
+
 
 
 @pytest.mark.asyncio
@@ -31,18 +37,18 @@ class TestAsyncCircuitBreaker:
         assert result == "success"
 
     async def test_opens_on_failures(self):
-        """Test that circuit opens after too many failures."""
+        """Test that circuit opens after too many server failures."""
         breaker = AsyncCircuitBreaker(fail_max=2, reset_timeout=5)
 
         async def failing_func():
-            raise Exception("Test error")
+            raise ServerError("Server error")
 
         # First failure
-        with pytest.raises(Exception):
+        with pytest.raises(ServerError):
             await breaker.call_async(failing_func)
 
         # Second failure - circuit should still be closed
-        with pytest.raises(Exception):
+        with pytest.raises(ServerError):
             await breaker.call_async(failing_func)
 
         # Third failure - circuit should open
@@ -54,28 +60,65 @@ class TestAsyncCircuitBreaker:
         breaker = AsyncCircuitBreaker(fail_max=1, reset_timeout=5)
 
         async def failing_func():
-            raise Exception("Test error")
+            raise ServerError("Server error")
 
         # Fail once to open circuit
-        with pytest.raises(Exception):
+        with pytest.raises(ServerError):
             await breaker.call_async(failing_func)
 
         # Next request should fail fast with CircuitBreakerOpenError
         with pytest.raises(CircuitBreakerOpenError):
             await breaker.call_async(failing_func)
 
+    async def test_client_errors_do_not_trip_breaker(self):
+        """Test that client errors (4xx) do not count as circuit breaker failures."""
+        breaker = AsyncCircuitBreaker(fail_max=2, reset_timeout=5)
+
+        async def client_error_func():
+            raise StatusCodeError("Client error (400)")
+
+        # Client errors should NOT trip the breaker, even after many calls
+        for _ in range(10):
+            with pytest.raises(StatusCodeError):
+                await breaker.call_async(client_error_func)
+
+        # Circuit should still be closed — next call should NOT raise CircuitBreakerOpenError
+        async def success_func():
+            return "success"
+
+        result = await breaker.call_async(success_func)
+        assert result == "success"
+
+    async def test_auth_errors_do_not_trip_breaker(self):
+        """Test that authentication errors do not count as circuit breaker failures."""
+        breaker = AsyncCircuitBreaker(fail_max=1, reset_timeout=5)
+
+        async def auth_error_func():
+            raise AuthenticationError("Authentication failed (401)")
+
+        # Auth error should not trip the breaker
+        with pytest.raises(AuthenticationError):
+            await breaker.call_async(auth_error_func)
+
+        # Circuit should still be closed
+        async def success_func():
+            return "success"
+
+        result = await breaker.call_async(success_func)
+        assert result == "success"
+
     async def test_half_open_to_closed_on_success(self):
         """Test that circuit transitions from half-open to closed on success."""
         breaker = AsyncCircuitBreaker(fail_max=1, reset_timeout=0.1)
 
         async def failing_func():
-            raise Exception("Test error")
+            raise ServerError("Server error")
 
         async def success_func():
             return "success"
 
         # Fail to open circuit
-        with pytest.raises(Exception):
+        with pytest.raises(ServerError):
             await breaker.call_async(failing_func)
 
         # Wait for timeout
@@ -94,17 +137,17 @@ class TestAsyncCircuitBreaker:
         breaker = AsyncCircuitBreaker(fail_max=1, reset_timeout=0.1)
 
         async def failing_func():
-            raise Exception("Test error")
+            raise ServerError("Server error")
 
         # Fail to open circuit
-        with pytest.raises(Exception):
+        with pytest.raises(ServerError):
             await breaker.call_async(failing_func)
 
         # Wait for timeout
         await asyncio.sleep(0.2)
 
         # Failure in half-open should open circuit again
-        with pytest.raises(Exception):
+        with pytest.raises(ServerError):
             await breaker.call_async(failing_func)
 
         # Next request should fail fast
