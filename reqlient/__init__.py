@@ -11,6 +11,7 @@ from .async_ import (
     AsyncCircuitBreakerRegistry,
     AsyncInterceptor,
     AsyncRestClient,
+    TraceContextInterceptor,
 )
 from .core import (
     AuthenticationError,
@@ -66,6 +67,7 @@ __all__ = [
     "Interceptor",
     # Interceptors (async)
     "AsyncInterceptor",
+    "TraceContextInterceptor",
     # Request/Response
     "RequestContext",
     "ResponseContext",
