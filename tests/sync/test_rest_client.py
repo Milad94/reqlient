@@ -3,10 +3,10 @@ Comprehensive tests for RestClient.
 """
 
 import time
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
-import requests
 from pydantic import BaseModel, ValidationError
 
 from reqlient.core.errors import (
@@ -359,7 +359,7 @@ class TestRestClientErrorHandling:
         """Test handling of connection errors."""
         requests_mock.get(
             "https://api.example.com/v1/users/1",
-            exc=requests.exceptions.ConnectionError("Connection failed"),
+            exc=httpx.ConnectError("Connection failed"),
         )
 
         with pytest.raises(ConnectionError) as exc_info:
@@ -372,7 +372,7 @@ class TestRestClientErrorHandling:
         """Test handling of timeout errors."""
         requests_mock.get(
             "https://api.example.com/v1/users/1",
-            exc=requests.exceptions.Timeout("Request timed out"),
+            exc=httpx.TimeoutException("Request timed out"),
         )
 
         with pytest.raises(TimeoutError) as exc_info:
@@ -515,3 +515,114 @@ class TestRestClientThreadSafety:
         # Each thread should have its own session
         assert len(sessions) == 2
         assert sessions[0] is not sessions[1]
+
+
+class TestRestClientTransport:
+    """Test httpx transport configuration: TLS verification and redirects.
+
+    These lock in behavior that differs between ``requests`` (the previous HTTP
+    backend) and ``httpx``: httpx does not follow redirects by default and does
+    not accept ``verify`` as a per-request argument, so both must be configured
+    on the client at construction time.
+    """
+
+    def test_verify_ssl_false_passed_to_httpx_client(self, base_url, mock_logger):
+        """verify_ssl=False must be forwarded to the underlying httpx.Client."""
+        with patch("reqlient.sync.rest_client.httpx.Client") as mock_client_cls:
+            RestClient(
+                base_url=base_url,
+                service_name="test_verify_off",
+                logger=mock_logger,
+                verify_ssl=False,
+                use_circuit_breaker=False,
+            )
+
+        mock_client_cls.assert_called_once()
+        kwargs = mock_client_cls.call_args.kwargs
+        assert kwargs["verify"] is False
+        # Redirect-following is always enabled to match requests' default behavior.
+        assert kwargs["follow_redirects"] is True
+
+    def test_verify_ssl_true_by_default(self, base_url, mock_logger):
+        """TLS verification must be on unless explicitly disabled."""
+        with patch("reqlient.sync.rest_client.httpx.Client") as mock_client_cls:
+            RestClient(
+                base_url=base_url,
+                service_name="test_verify_on",
+                logger=mock_logger,
+                use_circuit_breaker=False,
+            )
+
+        assert mock_client_cls.call_args.kwargs["verify"] is True
+
+    def test_verify_ssl_applied_to_ssl_context(self, base_url, mock_logger):
+        """verify_ssl must actually disable certificate verification on the client."""
+        import ssl
+
+        secure = RestClient(
+            base_url=base_url,
+            service_name="secure",
+            logger=mock_logger,
+            verify_ssl=True,
+            use_circuit_breaker=False,
+        )
+        insecure = RestClient(
+            base_url=base_url,
+            service_name="insecure",
+            logger=mock_logger,
+            verify_ssl=False,
+            use_circuit_breaker=False,
+        )
+
+        secure_ctx = secure.session._transport._pool._ssl_context
+        insecure_ctx = insecure.session._transport._pool._ssl_context
+
+        assert secure_ctx.verify_mode == ssl.CERT_REQUIRED
+        assert secure_ctx.check_hostname is True
+        assert insecure_ctx.verify_mode == ssl.CERT_NONE
+        assert insecure_ctx.check_hostname is False
+
+    def test_clients_do_not_share_a_session(self, base_url, mock_logger):
+        """Each client must own its httpx.Client so per-client verify/timeout are honored.
+
+        Regression guard: the client used to be cached in a module-global
+        thread-local shared across every instance, which silently leaked the
+        first instance's verify_ssl/timeout to all later instances.
+        """
+        client_a = RestClient(
+            base_url=base_url,
+            service_name="client_a",
+            logger=mock_logger,
+            verify_ssl=True,
+            use_circuit_breaker=False,
+        )
+        client_b = RestClient(
+            base_url=base_url,
+            service_name="client_b",
+            logger=mock_logger,
+            verify_ssl=False,
+            use_circuit_breaker=False,
+        )
+
+        assert client_a.session is not client_b.session
+
+    def test_follows_redirects(self, basic_client, requests_mock):
+        """A 3xx redirect must be followed through to the final response."""
+        requests_mock.get(
+            "https://api.example.com/v1/users/1",
+            status_code=302,
+            headers={"Location": "https://api.example.com/v1/users/2"},
+        )
+        requests_mock.get(
+            "https://api.example.com/v1/users/2",
+            json={"id": 2, "name": "Redirected", "email": "redirected@example.com"},
+        )
+
+        response = basic_client.get("/users/1", response_data_schema=User)
+
+        assert response is not None
+        assert response.id == 2
+        assert response.name == "Redirected"
+        # Both the original URL and the redirect target should have been requested.
+        assert len(requests_mock.request_history) == 2
+        assert requests_mock.request_history[-1].url == "https://api.example.com/v1/users/2"

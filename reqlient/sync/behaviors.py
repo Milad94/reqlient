@@ -1,3 +1,4 @@
+import json
 import logging
 import time
 import uuid
@@ -5,7 +6,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any, Dict, Generic, List, Optional, Set, Type, get_origin
 
-import requests
+import httpx
 from pydantic import TypeAdapter
 from pybreaker import CircuitBreaker
 from pybreaker import CircuitBreakerError as PybreakerError
@@ -289,11 +290,10 @@ class IdempotencyHeaderBehavior(Behavior):
 class HttpBehavior(Behavior):
     """Behavior for making the actual HTTP request."""
 
-    def __init__(self, session: requests.Session, timeout: int, verify_ssl: bool):
+    def __init__(self, session: httpx.Client, timeout: int):
         super().__init__(None)  # This is always the last behavior
         self.session = session
         self.timeout = timeout
-        self.verify_ssl = verify_ssl
 
     def handle(self, request: RequestContext) -> ResponseContext:
         """Make the HTTP request and return a response context."""
@@ -305,14 +305,13 @@ class HttpBehavior(Behavior):
                 params=request.params,
                 headers=request.headers,
                 timeout=self.timeout,
-                verify=self.verify_ssl,
             )
 
             response_data: Optional[Dict[str, Any]] = None
             if response.content:
                 try:
                     response_data = response.json()
-                except requests.exceptions.JSONDecodeError:
+                except json.JSONDecodeError:
                     response_data = {"raw_content": response.text}
 
             return ResponseContext(
@@ -321,13 +320,13 @@ class HttpBehavior(Behavior):
                 data=response_data,
                 request=request,
             )
-        except requests.exceptions.ConnectionError as e:
-            error_context = _create_error_context(request, e)
-            raise CustomConnectionError(f"Connection error: {str(e)}", context=error_context)
-        except requests.exceptions.Timeout as e:
+        except httpx.TimeoutException as e:
             error_context = _create_error_context(request, e)
             raise TimeoutError(f"Request timeout: {str(e)}", context=error_context)
-        except requests.exceptions.RequestException as e:
+        except httpx.ConnectError as e:
+            error_context = _create_error_context(request, e)
+            raise CustomConnectionError(f"Connection error: {str(e)}", context=error_context)
+        except httpx.RequestError as e:
             error_context = _create_error_context(request, e)
             raise RequestError(f"Request failed: {str(e)}", context=error_context)
 

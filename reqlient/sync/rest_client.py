@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Generic, List, Optional, Set, Type, Union, get_origin
 from urllib.parse import urljoin
 
-import requests
+import httpx
 from pydantic import TypeAdapter
 from pybreaker import CircuitBreaker
 
@@ -27,8 +27,6 @@ from ..core.errors import (
 )
 from .interceptors import Interceptor
 from ..core.request_response import RequestContext, RequestT, ResponseContext, ResponseT
-
-_thread_local = threading.local()
 
 
 class RestClient(Generic[RequestT, ResponseT]):
@@ -84,6 +82,14 @@ class RestClient(Generic[RequestT, ResponseT]):
         self.timeout = timeout
         self.verify_ssl = verify_ssl
 
+        # Per-instance thread-local httpx client. This is per-instance (not a
+        # module global) so that each client gets its own httpx.Client built
+        # with its own verify_ssl/timeout — httpx bakes those into the client at
+        # construction, so a shared client would leak one instance's settings to
+        # another. It stays thread-local so each thread gets its own connection
+        # pool.
+        self._thread_local = threading.local()
+
         # Resolve circuit breaker: use provided, get from registry, or None
         if breaker is not None:
             resolved_breaker = breaker
@@ -118,11 +124,21 @@ class RestClient(Generic[RequestT, ResponseT]):
         self.write_pipeline = self.__build_write_pipeline(**pipeline_params)
 
     @property
-    def session(self) -> requests.Session:
-        """Thread-safe access to a session per thread"""
-        if not hasattr(_thread_local, "session"):
-            _thread_local.session = requests.Session()
-        return _thread_local.session
+    def session(self) -> httpx.Client:
+        """Thread-safe access to a client per thread.
+
+        ``follow_redirects=True`` preserves the redirect-following behavior that
+        ``requests`` had by default (httpx does not follow redirects otherwise).
+        TLS verification is configured at the client level because httpx, unlike
+        ``requests``, does not accept ``verify`` as a per-request argument.
+        """
+        if not hasattr(self._thread_local, "session"):
+            self._thread_local.session = httpx.Client(
+                verify=self.verify_ssl,
+                timeout=self.timeout,
+                follow_redirects=True,
+            )
+        return self._thread_local.session
 
     def __build_read_pipeline(
         self,
@@ -149,7 +165,7 @@ class RestClient(Generic[RequestT, ResponseT]):
         8. InterceptorBehavior - outermost layer
         """
         # 1. HttpBehavior - innermost, makes the actual HTTP call
-        pipeline: Behavior = HttpBehavior(self.session, timeout, verify_ssl)
+        pipeline: Behavior = HttpBehavior(self.session, timeout)
         
         # 2. LoggingBehavior - wraps HTTP to log before and after
         pipeline = LoggingBehavior(logger=logger, next_behavior=pipeline)
@@ -207,7 +223,7 @@ class RestClient(Generic[RequestT, ResponseT]):
         9. InterceptorBehavior - outermost layer
         """
         # 1. HttpBehavior - innermost, makes the actual HTTP call
-        pipeline: Behavior = HttpBehavior(self.session, timeout, verify_ssl)
+        pipeline: Behavior = HttpBehavior(self.session, timeout)
         
         # 2. LoggingBehavior - wraps HTTP to log before and after
         pipeline = LoggingBehavior(logger=logger, next_behavior=pipeline)

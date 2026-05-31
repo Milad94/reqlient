@@ -4,8 +4,8 @@ Integration tests for the full request pipeline.
 
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
-import requests
 from pydantic import BaseModel
 
 from reqlient import (
@@ -221,7 +221,7 @@ class TestFullPipeline:
         requests_mock.get(
             "https://api.example.com/v1/users/1",
             [
-                {"exc": requests.exceptions.ConnectionError("Connection failed")},
+                {"exc": httpx.ConnectError("Connection failed")},
                 {
                     "json": {"id": 1, "name": "John", "email": "john@example.com"},
                     "status_code": 200,

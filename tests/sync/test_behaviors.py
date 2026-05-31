@@ -4,8 +4,8 @@ Comprehensive tests for all behaviors in the pipeline.
 
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
-import requests
 from pydantic import BaseModel
 
 from reqlient.sync.behaviors import (
@@ -766,8 +766,8 @@ class TestHttpBehavior:
             json={"id": 1, "name": "John", "email": "john@example.com"},
         )
 
-        session = requests.Session()
-        behavior = HttpBehavior(session=session, timeout=30, verify_ssl=True)
+        session = httpx.Client()
+        behavior = HttpBehavior(session=session, timeout=30)
         request = RequestContext(
             method="GET",
             url="https://api.example.com/v1/users/1",
@@ -783,9 +783,9 @@ class TestHttpBehavior:
     def test_handles_connection_error(self):
         """Test that connection errors are handled."""
         session = MagicMock()
-        session.request.side_effect = requests.exceptions.ConnectionError("Connection failed")
+        session.request.side_effect = httpx.ConnectError("Connection failed")
 
-        behavior = HttpBehavior(session=session, timeout=30, verify_ssl=True)
+        behavior = HttpBehavior(session=session, timeout=30)
         request = RequestContext(
             method="GET",
             url="https://api.example.com/v1/users/1",
@@ -802,9 +802,9 @@ class TestHttpBehavior:
     def test_handles_timeout_error(self):
         """Test that timeout errors are handled."""
         session = MagicMock()
-        session.request.side_effect = requests.exceptions.Timeout("Request timed out")
+        session.request.side_effect = httpx.TimeoutException("Request timed out")
 
-        behavior = HttpBehavior(session=session, timeout=30, verify_ssl=True)
+        behavior = HttpBehavior(session=session, timeout=30)
         request = RequestContext(
             method="GET",
             url="https://api.example.com/v1/users/1",
@@ -826,8 +826,8 @@ class TestHttpBehavior:
             headers={"Content-Type": "text/plain"},
         )
 
-        session = requests.Session()
-        behavior = HttpBehavior(session=session, timeout=30, verify_ssl=True)
+        session = httpx.Client()
+        behavior = HttpBehavior(session=session, timeout=30)
         request = RequestContext(
             method="GET",
             url="https://api.example.com/v1/users/1",
@@ -844,8 +844,8 @@ class TestHttpBehavior:
         """Test that empty responses are handled."""
         requests_mock.get("https://api.example.com/v1/users/1", status_code=204)
 
-        session = requests.Session()
-        behavior = HttpBehavior(session=session, timeout=30, verify_ssl=True)
+        session = httpx.Client()
+        behavior = HttpBehavior(session=session, timeout=30)
         request = RequestContext(
             method="GET",
             url="https://api.example.com/v1/users/1",
