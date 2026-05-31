@@ -365,46 +365,21 @@ reqlient uses two optimized behavior pipelines to maximize performance and clari
 
 Each pipeline consists of `Behavior` objects that process requests in a specific order. This separation ensures that read operations don't pay the cost of idempotency checks.
 
+> The diagrams below show the pipeline with all features enabled. Retry, circuit
+> breaker, and bulkhead are configurable: `retry=None` / `circuit_breaker=None`
+> remove those stages, and the bulkhead is only present when you pass a
+> `BulkheadConfig` (it is **off by default**). The bulkhead sits **outside** the
+> circuit breaker, so a full bulkhead is never counted as a breaker failure.
+
 ### Read Pipeline (GET, HEAD)
 
 ```mermaid
 flowchart TD
     Start([GET/HEAD Request]) --> Intercept1[1. Interceptors: on_before_request]
     Intercept1 --> ReqVal[2. Request Validator]
-    ReqVal --> Breaker{3. Circuit Breaker:<br/>Is circuit open?}
-    Breaker -->|Open| Error1[❌ CircuitBreakerError]
-    Breaker -->|Closed| RespVal[4. Response Validator: Start]
-    RespVal --> Retry[5. Retry Logic: Start]
-    Retry --> Log1[6. 📝 Logging: Log request]
-    Log1 --> HTTP{7. 🌐 HTTP Call}
-    HTTP -->|Timeout/Connection Error| Log2err[8. 📝 Logging: Log error]
-    HTTP -->|Success| Log2[8. 📝 Logging: Log response]
-    Log2err --> RetryCheck{Retry attempts<br/>remaining?}
-    RetryCheck -->|Yes| Log1
-    RetryCheck -->|No| BreakerFail[❌ Breaker counts failure]
-    Log2 --> Status{9. Status Code Validator}
-    Status -->|500/502/503/504/429| RetryCheck2{Retry?}
-    RetryCheck2 -->|Yes| Log1
-    RetryCheck2 -->|No| BreakerFail
-    Status -->|401/403/404| NonRetryErr[❌ Non-retryable Error]
-    Status -->|200-299| ValidResp[10. Response Validator]
-    ValidResp -->|Invalid| RespErr[❌ ResponseValidationError<br/>NOT retried]
-    ValidResp -->|Valid| Intercept2[11. Interceptors: on_after_response]
-    Intercept2 --> BreakerSuccess[✅ Breaker: Reset count]
-    BreakerSuccess --> Return2([Return Response])
-    
-    style HTTP fill:#ffcccc,stroke:#ff0000,stroke-width:3px
-    style Retry fill:#ccffcc,stroke:#00cc00,stroke-width:2px
-```
-
-### Write Pipeline (POST, PUT, PATCH, DELETE)
-
-```mermaid
-flowchart TD
-    Start([POST/PUT/PATCH/DELETE Request]) --> Intercept1[1. Interceptors: on_before_request]
-    Intercept1 --> ReqVal[2. Request Validator]
-    ReqVal --> Idem[3. Idempotency Header:<br/>Add X-Idempotency-Key]
-    Idem --> Breaker{4. Circuit Breaker:<br/>Is circuit open?}
+    ReqVal --> Bulkhead{3. Bulkhead:<br/>Slot available?}
+    Bulkhead -->|Full| ErrorBH[❌ BulkheadFullError<br/>breaker NOT involved]
+    Bulkhead -->|Acquired| Breaker{4. Circuit Breaker:<br/>Is circuit open?}
     Breaker -->|Open| Error1[❌ CircuitBreakerError]
     Breaker -->|Closed| RespVal[5. Response Validator: Start]
     RespVal --> Retry[6. Retry Logic: Start]
@@ -424,11 +399,50 @@ flowchart TD
     ValidResp -->|Invalid| RespErr[❌ ResponseValidationError<br/>NOT retried]
     ValidResp -->|Valid| Intercept2[12. Interceptors: on_after_response]
     Intercept2 --> BreakerSuccess[✅ Breaker: Reset count]
-    BreakerSuccess --> Return([Return Response])
-    
+    BreakerSuccess --> ReleaseBH[13. Bulkhead: release slot]
+    ReleaseBH --> Return2([Return Response])
+
+    style HTTP fill:#ffcccc,stroke:#ff0000,stroke-width:3px
+    style Retry fill:#ccffcc,stroke:#00cc00,stroke-width:2px
+    style Bulkhead fill:#cce5ff,stroke:#0066cc,stroke-width:2px
+```
+
+### Write Pipeline (POST, PUT, PATCH, DELETE)
+
+```mermaid
+flowchart TD
+    Start([POST/PUT/PATCH/DELETE Request]) --> Intercept1[1. Interceptors: on_before_request]
+    Intercept1 --> ReqVal[2. Request Validator]
+    ReqVal --> Idem[3. Idempotency Header:<br/>Add X-Idempotency-Key]
+    Idem --> Bulkhead{4. Bulkhead:<br/>Slot available?}
+    Bulkhead -->|Full| ErrorBH[❌ BulkheadFullError<br/>breaker NOT involved]
+    Bulkhead -->|Acquired| Breaker{5. Circuit Breaker:<br/>Is circuit open?}
+    Breaker -->|Open| Error1[❌ CircuitBreakerError]
+    Breaker -->|Closed| RespVal[6. Response Validator: Start]
+    RespVal --> Retry[7. Retry Logic: Start]
+    Retry --> Log1[8. 📝 Logging: Log request]
+    Log1 --> HTTP{9. 🌐 HTTP Call}
+    HTTP -->|Timeout/Connection Error| Log2err[10. 📝 Logging: Log error]
+    HTTP -->|Success| Log2[10. 📝 Logging: Log response]
+    Log2err --> RetryCheck{Retry attempts<br/>remaining?}
+    RetryCheck -->|Yes| Log1
+    RetryCheck -->|No| BreakerFail[❌ Breaker counts failure]
+    Log2 --> Status{11. Status Code Validator}
+    Status -->|500/502/503/504/429| RetryCheck2{Retry?}
+    RetryCheck2 -->|Yes| Log1
+    RetryCheck2 -->|No| BreakerFail
+    Status -->|401/403/404| NonRetryErr[❌ Non-retryable Error]
+    Status -->|200-299| ValidResp[12. Response Validator]
+    ValidResp -->|Invalid| RespErr[❌ ResponseValidationError<br/>NOT retried]
+    ValidResp -->|Valid| Intercept2[13. Interceptors: on_after_response]
+    Intercept2 --> BreakerSuccess[✅ Breaker: Reset count]
+    BreakerSuccess --> ReleaseBH[14. Bulkhead: release slot]
+    ReleaseBH --> Return([Return Response])
+
     style HTTP fill:#ffcccc,stroke:#ff0000,stroke-width:3px
     style Idem fill:#ffffcc,stroke:#ccaa00,stroke-width:2px
     style Retry fill:#ccffcc,stroke:#00cc00,stroke-width:2px
+    style Bulkhead fill:#cce5ff,stroke:#0066cc,stroke-width:2px
 ```
 
 ### Key Differences
