@@ -676,8 +676,9 @@ except BulkheadFullError as e:
     # downstream failure). Not retryable — shed load or return a cached value.
     print(f"Bulkhead full for this service: {e}")
 except RateLimitError as e:
-    # The client has already waited for the 'Retry-After' header.
-    # You might want to log this or re-queue the task for later.
+    # Raised on HTTP 429 after retries (with exponential backoff) are exhausted.
+    # Note: the server's 'Retry-After' header is not yet honored — backoff is
+    # purely exponential. Log this or re-queue the task for later.
     print(f"Rate limited. The request will need to be tried again later. Details: {e}")
 except ServerError as e:
     # The service is likely down; retries have already been attempted.
