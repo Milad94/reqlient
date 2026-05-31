@@ -710,7 +710,7 @@ This project uses modern Python tooling for development:
    ```bash
    # macOS
    brew install just
-   
+
    # Linux
    cargo install just
    ```

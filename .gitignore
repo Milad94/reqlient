@@ -141,6 +141,3 @@ uv.lock
 *.log
 .pytest_cache/
 htmlcov/
-
-
-

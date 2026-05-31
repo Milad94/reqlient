@@ -94,6 +94,7 @@ select = [
     "ARG", # flake8-unused-arguments
     "SIM", # flake8-simplify
     "TCH", # flake8-type-checking
+    "S",   # flake8-bandit (security)
 ]
 ignore = [
     "E501",  # line too long (handled by formatter)
@@ -174,4 +175,3 @@ include = [
     "/pyproject.toml",
     "/README.md",
 ]
-

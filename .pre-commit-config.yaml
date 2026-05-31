@@ -2,7 +2,7 @@
 # See https://pre-commit.com for more information
 
 repos:
-  # 1. Pre-commit hooks for general file checks
+  # 1. General file hygiene
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
@@ -11,77 +11,55 @@ repos:
       - id: end-of-file-fixer
       - id: check-yaml
         args: [--unsafe]
+      - id: check-toml
+      - id: check-json
       - id: check-added-large-files
         args: [--maxkb=1000]
       - id: check-merge-conflict
-      - id: check-toml
-      - id: check-json
-      - id: pretty-format-json
-        args: [--autofix]
       - id: detect-private-key
       - id: mixed-line-ending
         args: [--fix=lf]
 
-  # 2. Ruff linter - replaces flake8, isort, pyupgrade, and more
+  # 2. Ruff — lint (incl. flake8-bandit "S" security rules) and format
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.14.8
     hooks:
-      # Run the linter
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
-      # Run the formatter
       - id: ruff-format
 
-  # 3. Check for common security issues
-  - repo: https://github.com/PyCQA/bandit
-    rev: 1.9.2
-    hooks:
-      - id: bandit
-        args: [-c, pyproject.toml]
-        additional_dependencies: ["bandit[toml]"]
-        exclude: ^tests/
-
-  # 4. Static Type Checking (Mypy)
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.19.0 # Latest stable version
-    hooks:
-      - id: mypy
-        # Mypy is crucial for ensuring type-safety in larger projects.
-        # You may need to add dependencies here (e.g., if you use Pydantic)
-        # additional_dependencies: ["pydantic==2.7.4"]
-
-  # 5. Pylint - Static code analysis (local hook to use project dependencies)
-  - repo: local
-    hooks:
-      - id: pylint
-        name: pylint
-        entry: bash -c 'PYTHONPATH=. uv run pylint --rcfile=pyproject.toml --score=y "$@"' --
-        language: system
-        types: [python]
-        exclude: ^(tests/|core/migrations/|_extras/)
-
-  # 6. Typo and Spelling Checker (codespell)
+  # 3. Typo / spelling checker
   - repo: https://github.com/codespell-project/codespell
-    rev: v2.4.1 # Latest stable version
+    rev: v2.4.1
     hooks:
       - id: codespell
         name: Check for typos/misspellings
-        args: [--ignore-words-list, "astroid,selectin"]
         exclude: ^uv\.lock$
 
-  # 8. Run tests (Local hook remains)
+  # 4. Static type checking — local hook so it uses the project env (matches CI)
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: uv run mypy
+        language: system
+        types: [python]
+        pass_filenames: false
+
+  # 5. Tests — run before push (not on every commit); CI also runs them
   - repo: local
     hooks:
       - id: pytest
-        name: Run all tests
-        entry: bash -c 'PYTHONPATH=. uv run pytest -n auto tests/'
+        name: Run tests
+        entry: uv run pytest -q -n auto tests/
         language: system
         pass_filenames: false
         always_run: true
+        stages: [pre-push]
 
-# Global settings
+# Use whatever python3 the contributor has (project supports 3.12+)
 default_language_version:
-  python: python3.13
+  python: python3
 
 # Files to exclude from all hooks
 exclude: |
@@ -90,8 +68,7 @@ exclude: |
       ^venv/|
       ^\.git/|
       ^__pycache__/|
-      \.pyc$|
+      \.pyc$
   )
 
-# Fail fast if any hook fails
 fail_fast: false
