@@ -12,7 +12,9 @@ import respx
 from pydantic import BaseModel
 
 from reqlient.sync.circuit_breakers import CircuitBreakerRegistry
+from reqlient.sync.bulkhead import BulkheadRegistry
 from reqlient.async_.circuit_breakers import AsyncCircuitBreakerRegistry
+from reqlient.async_.bulkhead import AsyncBulkheadRegistry
 from reqlient.sync.rest_client import RestClient
 
 
@@ -222,10 +224,14 @@ def mock_metrics_service(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def reset_circuit_breaker_registries():
-    """Reset both sync and async circuit breaker registries before each test."""
+    """Reset sync/async circuit breaker and bulkhead registries before each test."""
     CircuitBreakerRegistry.reset()
     AsyncCircuitBreakerRegistry.reset()
+    BulkheadRegistry.reset()
+    AsyncBulkheadRegistry.reset()
     yield
     # Also reset after test to ensure clean state
     CircuitBreakerRegistry.reset()
     AsyncCircuitBreakerRegistry.reset()
+    BulkheadRegistry.reset()
+    AsyncBulkheadRegistry.reset()

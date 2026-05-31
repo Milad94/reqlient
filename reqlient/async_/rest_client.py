@@ -8,6 +8,7 @@ from pydantic import TypeAdapter
 
 from .behaviors import (
     AsyncBehavior,
+    AsyncBulkheadBehavior,
     AsyncCircuitBreakerBehavior,
     AsyncHttpBehavior,
     AsyncIdempotencyHeaderBehavior,
@@ -18,6 +19,7 @@ from .behaviors import (
     AsyncRetryBehavior,
     AsyncStatusCodeValidationBehavior,
 )
+from .bulkhead import AsyncBulkhead, AsyncBulkheadRegistry
 from .circuit_breakers import AsyncCircuitBreaker, AsyncCircuitBreakerRegistry
 from .interceptors import AsyncInterceptor
 from ..core.errors import (
@@ -55,6 +57,10 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
         interceptors: Optional[List[AsyncInterceptor]] = None,
         client: Optional[httpx.AsyncClient] = None,
         use_circuit_breaker: bool = True,
+        use_bulkhead: bool = False,
+        max_concurrent_requests: int = 10,
+        bulkhead_max_wait: float = 0.0,
+        bulkhead: Optional[AsyncBulkhead] = None,
     ):
         """
         Initialize the AsyncRestClient with base configuration.
@@ -84,6 +90,10 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
         self.verify_ssl = verify_ssl
         self._use_circuit_breaker = use_circuit_breaker
         self._explicit_breaker = breaker
+        self._use_bulkhead = use_bulkhead
+        self._explicit_bulkhead = bulkhead
+        self._max_concurrent_requests = max_concurrent_requests
+        self._bulkhead_max_wait = bulkhead_max_wait
 
         # Store default behaviors to be configured per-request
         self.default_retry_config = {
@@ -127,11 +137,24 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
             return await AsyncCircuitBreakerRegistry.get(self.service_name)
         return None
 
+    def _resolve_bulkhead(self) -> Optional[AsyncBulkhead]:
+        """Resolve bulkhead: use provided, get from registry, or None."""
+        if self._explicit_bulkhead is not None:
+            return self._explicit_bulkhead
+        elif self._use_bulkhead:
+            return AsyncBulkheadRegistry.get(
+                self.service_name,
+                max_concurrent=self._max_concurrent_requests,
+                max_wait=self._bulkhead_max_wait,
+            )
+        return None
+
     async def _ensure_pipelines_built(self):
         """Ensure pipelines are built (requires async for registry access)."""
         if self._read_pipeline is None or self._write_pipeline is None:
             breaker = await self._resolve_breaker()
-            params = {**self._pipeline_params, "breaker": breaker}
+            bulkhead = self._resolve_bulkhead()
+            params = {**self._pipeline_params, "breaker": breaker, "bulkhead": bulkhead}
             self._read_pipeline = self._build_read_pipeline(**params)
             self._write_pipeline = self._build_write_pipeline(**params)
 
@@ -170,6 +193,7 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
         timeout: int,
         verify_ssl: bool,
         breaker: Optional[AsyncCircuitBreaker],
+        bulkhead: Optional[AsyncBulkhead],
         max_retries: int,
         retry_backoff_factor: float,
         retry_status_codes: Set[int],
@@ -177,7 +201,7 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
     ) -> AsyncBehavior:
         """
         Build the read pipeline for GET and HEAD requests.
-        
+
         Read pipeline (built backwards from HTTP):
         1. AsyncHttpBehavior - makes HTTP call
         2. AsyncLoggingBehavior - logs request/response
@@ -185,19 +209,20 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
         4. AsyncRetryBehavior - retries on network/server errors
         5. AsyncResponseValidationBehavior - validates response schema (outside retry)
         6. AsyncCircuitBreakerBehavior - circuit breaker
-        7. AsyncRequestDataSchemaValidationBehavior - validates request data schema
-        8. AsyncInterceptorBehavior - outermost layer
+        7. AsyncBulkheadBehavior - concurrency limiter (outside the breaker)
+        8. AsyncRequestDataSchemaValidationBehavior - validates request data schema
+        9. AsyncInterceptorBehavior - outermost layer
         """
         # 1. AsyncHttpBehavior - innermost, makes the actual HTTP call
         # Pass a lambda to get the client dynamically
         pipeline: AsyncBehavior = AsyncHttpBehavior(lambda: self.client, timeout, verify_ssl)
-        
+
         # 2. AsyncLoggingBehavior - wraps HTTP to log before and after
         pipeline = AsyncLoggingBehavior(logger=logger, next_behavior=pipeline)
-        
+
         # 3. AsyncStatusCodeValidationBehavior - validates status codes after HTTP
         pipeline = AsyncStatusCodeValidationBehavior(next_behavior=pipeline)
-        
+
         # 4. AsyncRetryBehavior - wraps HTTP + logging + status validation (retries these)
         pipeline = AsyncRetryBehavior(
             max_retries=max_retries,
@@ -205,18 +230,23 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
             retry_status_codes=retry_status_codes,
             next_behavior=pipeline,
         )
-        
+
         # 5. AsyncResponseDataSchemaValidationBehavior - validates response data schema (outside retry, not retried)
         pipeline = AsyncResponseDataSchemaValidationBehavior(response_data_schema=None, next_behavior=pipeline)
-        
+
         # 6. AsyncCircuitBreakerBehavior - wraps retry logic
         if breaker:
             pipeline = AsyncCircuitBreakerBehavior(breaker=breaker, next_behavior=pipeline)
-        
-        # 7. AsyncRequestDataSchemaValidationBehavior - validates request schema at the start
+
+        # 7. AsyncBulkheadBehavior - wraps the breaker so a full bulkhead is not
+        #    counted as a breaker failure, and validation failures don't take a slot.
+        if bulkhead:
+            pipeline = AsyncBulkheadBehavior(bulkhead=bulkhead, next_behavior=pipeline)
+
+        # 8. AsyncRequestDataSchemaValidationBehavior - validates request schema at the start
         pipeline = AsyncRequestDataSchemaValidationBehavior(request_schema=None, next_behavior=pipeline)
-        
-        # 8. AsyncInterceptorBehavior - outermost layer for custom hooks
+
+        # 9. AsyncInterceptorBehavior - outermost layer for custom hooks
         if interceptors:
             pipeline = AsyncInterceptorBehavior(interceptors=interceptors, next_behavior=pipeline)
 
@@ -228,6 +258,7 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
         timeout: int,
         verify_ssl: bool,
         breaker: Optional[AsyncCircuitBreaker],
+        bulkhead: Optional[AsyncBulkhead],
         max_retries: int,
         retry_backoff_factor: float,
         retry_status_codes: Set[int],
@@ -235,7 +266,7 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
     ) -> AsyncBehavior:
         """
         Build the write pipeline for POST, PUT, PATCH, and DELETE requests.
-        
+
         Write pipeline (built backwards from HTTP):
         1. AsyncHttpBehavior - makes HTTP call
         2. AsyncLoggingBehavior - logs request/response
@@ -243,20 +274,21 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
         4. AsyncRetryBehavior - retries on network/server errors
         5. AsyncResponseDataSchemaValidationBehavior - validates response data schema (outside retry)
         6. AsyncCircuitBreakerBehavior - circuit breaker
-        7. AsyncIdempotencyHeaderBehavior - adds idempotency headers for POST/PUT/DELETE
-        8. AsyncRequestDataSchemaValidationBehavior - validates request schema
-        9. AsyncInterceptorBehavior - outermost layer
+        7. AsyncBulkheadBehavior - concurrency limiter (outside the breaker)
+        8. AsyncIdempotencyHeaderBehavior - adds idempotency headers for POST/PUT/DELETE
+        9. AsyncRequestDataSchemaValidationBehavior - validates request schema
+        10. AsyncInterceptorBehavior - outermost layer
         """
         # 1. AsyncHttpBehavior - innermost, makes the actual HTTP call
         # Pass a lambda to get the client dynamically
         pipeline: AsyncBehavior = AsyncHttpBehavior(lambda: self.client, timeout, verify_ssl)
-        
+
         # 2. AsyncLoggingBehavior - wraps HTTP to log before and after
         pipeline = AsyncLoggingBehavior(logger=logger, next_behavior=pipeline)
-        
+
         # 3. AsyncStatusCodeValidationBehavior - validates status codes after HTTP
         pipeline = AsyncStatusCodeValidationBehavior(next_behavior=pipeline)
-        
+
         # 4. AsyncRetryBehavior - wraps HTTP + logging + status validation (retries these)
         pipeline = AsyncRetryBehavior(
             max_retries=max_retries,
@@ -264,21 +296,25 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
             retry_status_codes=retry_status_codes,
             next_behavior=pipeline,
         )
-        
+
         # 5. AsyncResponseDataSchemaValidationBehavior - validates response data schema (outside retry, not retried)
         pipeline = AsyncResponseDataSchemaValidationBehavior(response_data_schema=None, next_behavior=pipeline)
-        
+
         # 6. AsyncCircuitBreakerBehavior - wraps retry logic
         if breaker:
             pipeline = AsyncCircuitBreakerBehavior(breaker=breaker, next_behavior=pipeline)
-        
-        # 7. AsyncIdempotencyHeaderBehavior - adds idempotency headers (only in write pipeline)
+
+        # 7. AsyncBulkheadBehavior - wraps the breaker (see read pipeline for rationale)
+        if bulkhead:
+            pipeline = AsyncBulkheadBehavior(bulkhead=bulkhead, next_behavior=pipeline)
+
+        # 8. AsyncIdempotencyHeaderBehavior - adds idempotency headers (only in write pipeline)
         pipeline = AsyncIdempotencyHeaderBehavior(next_behavior=pipeline)
-        
-        # 8. AsyncRequestDataSchemaValidationBehavior - validates request data schema at the start
+
+        # 9. AsyncRequestDataSchemaValidationBehavior - validates request data schema at the start
         pipeline = AsyncRequestDataSchemaValidationBehavior(request_data_schema=None, next_behavior=pipeline)
-        
-        # 9. AsyncInterceptorBehavior - outermost layer for custom hooks
+
+        # 10. AsyncInterceptorBehavior - outermost layer for custom hooks
         if interceptors:
             pipeline = AsyncInterceptorBehavior(interceptors=interceptors, next_behavior=pipeline)
 

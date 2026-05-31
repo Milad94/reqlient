@@ -8,9 +8,11 @@ import httpx
 from pydantic import TypeAdapter
 from pybreaker import CircuitBreaker
 
+from .bulkhead import Bulkhead, BulkheadRegistry
 from .circuit_breakers import CircuitBreakerRegistry
 from .behaviors import (
     Behavior,
+    BulkheadBehavior,
     CircuitBreakerBehavior,
     HttpBehavior,
     IdempotencyHeaderBehavior,
@@ -55,6 +57,10 @@ class RestClient(Generic[RequestT, ResponseT]):
         breaker: Optional[CircuitBreaker] = None,
         interceptors: Optional[List[Interceptor]] = None,
         use_circuit_breaker: bool = True,
+        use_bulkhead: bool = False,
+        max_concurrent_requests: int = 10,
+        bulkhead_max_wait: float = 0.0,
+        bulkhead: Optional[Bulkhead] = None,
     ):
         """
         Initialize the RestClient with base configuration.
@@ -74,6 +80,15 @@ class RestClient(Generic[RequestT, ResponseT]):
             interceptors: An optional list of interceptors to hook into the request/response cycle.
             use_circuit_breaker: Whether to use a circuit breaker. If True and no breaker is provided,
                                 one will be obtained from CircuitBreakerRegistry. Default is True.
+            use_bulkhead: Whether to enable the bulkhead (concurrency limiter). When True and no
+                         bulkhead is provided, one is obtained from BulkheadRegistry using
+                         service_name. Default is False.
+            max_concurrent_requests: Maximum concurrent in-flight requests allowed by the bulkhead
+                                    (used only when use_bulkhead is True and no bulkhead is provided).
+            bulkhead_max_wait: Seconds to wait for a free bulkhead slot before raising
+                              BulkheadFullError. 0 (default) means reject immediately when full.
+            bulkhead: An optional Bulkhead instance. If provided, it is used regardless of
+                     use_bulkhead/max_concurrent_requests.
         """
         self.base_url = base_url.rstrip("/")
         self.service_name = service_name
@@ -98,6 +113,18 @@ class RestClient(Generic[RequestT, ResponseT]):
         else:
             resolved_breaker = None
 
+        # Resolve bulkhead: use provided, get from registry, or None
+        if bulkhead is not None:
+            resolved_bulkhead = bulkhead
+        elif use_bulkhead:
+            resolved_bulkhead = BulkheadRegistry.get(
+                service_name,
+                max_concurrent=max_concurrent_requests,
+                max_wait=bulkhead_max_wait,
+            )
+        else:
+            resolved_bulkhead = None
+
         # Store default behaviors to be configured per-request
         self.default_retry_config = {
             "max_retries": max_retries,
@@ -109,6 +136,7 @@ class RestClient(Generic[RequestT, ResponseT]):
         pipeline_params = {
             "logger": self.logger,
             "breaker": resolved_breaker,
+            "bulkhead": resolved_bulkhead,
             "timeout": self.timeout,
             "verify_ssl": self.verify_ssl,
             "max_retries": max_retries,
@@ -146,6 +174,7 @@ class RestClient(Generic[RequestT, ResponseT]):
         timeout: int,
         verify_ssl: bool,
         breaker: Optional[CircuitBreaker],
+        bulkhead: Optional[Bulkhead],
         max_retries: int,
         retry_backoff_factor: float,
         retry_status_codes: Set[int],
@@ -153,7 +182,7 @@ class RestClient(Generic[RequestT, ResponseT]):
     ) -> Behavior:
         """
         Build the read pipeline for GET and HEAD requests.
-        
+
         Read pipeline (built backwards from HTTP):
         1. HttpBehavior - makes HTTP call
         2. LoggingBehavior - logs request/response
@@ -161,18 +190,19 @@ class RestClient(Generic[RequestT, ResponseT]):
         4. RetryBehavior - retries on network/server errors
         5. ResponseValidationBehavior - validates response schema (outside retry)
         6. CircuitBreakerBehavior - circuit breaker
-        7. RequestValidationBehavior - validates request schema
-        8. InterceptorBehavior - outermost layer
+        7. BulkheadBehavior - concurrency limiter (outside the breaker)
+        8. RequestValidationBehavior - validates request schema
+        9. InterceptorBehavior - outermost layer
         """
         # 1. HttpBehavior - innermost, makes the actual HTTP call
         pipeline: Behavior = HttpBehavior(self.session, timeout)
-        
+
         # 2. LoggingBehavior - wraps HTTP to log before and after
         pipeline = LoggingBehavior(logger=logger, next_behavior=pipeline)
-        
+
         # 3. StatusCodeValidationBehavior - validates status codes after logging
         pipeline = StatusCodeValidationBehavior(next_behavior=pipeline)
-        
+
         # 4. RetryBehavior - wraps HTTP + logging + status validation (retries these)
         pipeline = RetryBehavior(
             max_retries=max_retries,
@@ -180,18 +210,23 @@ class RestClient(Generic[RequestT, ResponseT]):
             retry_status_codes=retry_status_codes,
             next_behavior=pipeline,
         )
-        
+
         # 5. ResponseValidationBehavior - validates response schema (outside retry, not retried)
         pipeline = ResponseValidationBehavior(response_data_schema=None, next_behavior=pipeline)
-        
+
         # 6. CircuitBreakerBehavior - wraps retry logic
         if breaker:
             pipeline = CircuitBreakerBehavior(breaker=breaker, next_behavior=pipeline)
-        
-        # 7. RequestValidationBehavior - validates request schema at the start
+
+        # 7. BulkheadBehavior - wraps the breaker so a full bulkhead is not counted
+        #    as a breaker failure, and so validation failures don't consume a slot.
+        if bulkhead:
+            pipeline = BulkheadBehavior(bulkhead=bulkhead, next_behavior=pipeline)
+
+        # 8. RequestValidationBehavior - validates request schema at the start
         pipeline = RequestValidationBehavior(request_data_schema=None, next_behavior=pipeline)
-        
-        # 8. InterceptorBehavior - outermost layer for custom hooks
+
+        # 9. InterceptorBehavior - outermost layer for custom hooks
         if interceptors:
             pipeline = InterceptorBehavior(interceptors=interceptors, next_behavior=pipeline)
 
@@ -203,6 +238,7 @@ class RestClient(Generic[RequestT, ResponseT]):
         timeout: int,
         verify_ssl: bool,
         breaker: Optional[CircuitBreaker],
+        bulkhead: Optional[Bulkhead],
         max_retries: int,
         retry_backoff_factor: float,
         retry_status_codes: Set[int],
@@ -210,7 +246,7 @@ class RestClient(Generic[RequestT, ResponseT]):
     ) -> Behavior:
         """
         Build the write pipeline for POST, PUT, PATCH, and DELETE requests.
-        
+
         Write pipeline (built backwards from HTTP):
         1. HttpBehavior - makes HTTP call
         2. LoggingBehavior - logs request/response
@@ -218,19 +254,20 @@ class RestClient(Generic[RequestT, ResponseT]):
         4. RetryBehavior - retries on network/server errors
         5. ResponseValidationBehavior - validates response schema (outside retry)
         6. CircuitBreakerBehavior - circuit breaker
-        7. IdempotencyHeaderBehavior - adds idempotency headers for POST/PUT/DELETE
-        8. RequestValidationBehavior - validates request schema
-        9. InterceptorBehavior - outermost layer
+        7. BulkheadBehavior - concurrency limiter (outside the breaker)
+        8. IdempotencyHeaderBehavior - adds idempotency headers for POST/PUT/DELETE
+        9. RequestValidationBehavior - validates request schema
+        10. InterceptorBehavior - outermost layer
         """
         # 1. HttpBehavior - innermost, makes the actual HTTP call
         pipeline: Behavior = HttpBehavior(self.session, timeout)
-        
+
         # 2. LoggingBehavior - wraps HTTP to log before and after
         pipeline = LoggingBehavior(logger=logger, next_behavior=pipeline)
-        
+
         # 3. StatusCodeValidationBehavior - validates status codes after logging
         pipeline = StatusCodeValidationBehavior(next_behavior=pipeline)
-        
+
         # 4. RetryBehavior - wraps HTTP + logging + status validation (retries these)
         pipeline = RetryBehavior(
             max_retries=max_retries,
@@ -238,21 +275,26 @@ class RestClient(Generic[RequestT, ResponseT]):
             retry_status_codes=retry_status_codes,
             next_behavior=pipeline,
         )
-        
+
         # 5. ResponseValidationBehavior - validates response schema (outside retry, not retried)
         pipeline = ResponseValidationBehavior(response_data_schema=None, next_behavior=pipeline)
-        
+
         # 6. CircuitBreakerBehavior - wraps retry logic
         if breaker:
             pipeline = CircuitBreakerBehavior(breaker=breaker, next_behavior=pipeline)
-        
-        # 7. IdempotencyHeaderBehavior - adds idempotency headers (only in write pipeline)
+
+        # 7. BulkheadBehavior - wraps the breaker (see read pipeline for rationale).
+        #    Placed inside idempotency so the key is generated before acquiring a slot.
+        if bulkhead:
+            pipeline = BulkheadBehavior(bulkhead=bulkhead, next_behavior=pipeline)
+
+        # 8. IdempotencyHeaderBehavior - adds idempotency headers (only in write pipeline)
         pipeline = IdempotencyHeaderBehavior(next_behavior=pipeline)
-        
-        # 8. RequestValidationBehavior - validates request schema at the start
+
+        # 9. RequestValidationBehavior - validates request schema at the start
         pipeline = RequestValidationBehavior(request_data_schema=None, next_behavior=pipeline)
-        
-        # 9. InterceptorBehavior - outermost layer for custom hooks
+
+        # 10. InterceptorBehavior - outermost layer for custom hooks
         if interceptors:
             pipeline = InterceptorBehavior(interceptors=interceptors, next_behavior=pipeline)
 

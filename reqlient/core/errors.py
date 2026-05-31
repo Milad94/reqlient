@@ -97,3 +97,13 @@ class ResourceNotFoundError(RestClientError):
 
 class CircuitBreakerOpenError(RestClientError):
     """The request was blocked because the circuit breaker is open."""
+
+
+class BulkheadFullError(RestClientError):
+    """The request was rejected because the service's bulkhead (concurrency
+    limit) is full.
+
+    This signals local overload — too many concurrent in-flight requests to the
+    service — not a failure of the downstream service. It is intentionally NOT a
+    ``RetryableError``: retrying immediately would not free a slot.
+    """

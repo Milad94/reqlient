@@ -7,6 +7,8 @@ designed for reliable communication with external REST APIs.
 
 # Import from subpackages
 from .async_ import (
+    AsyncBulkhead,
+    AsyncBulkheadRegistry,
     AsyncCircuitBreaker,
     AsyncCircuitBreakerRegistry,
     AsyncInterceptor,
@@ -16,6 +18,7 @@ from .async_ import (
 from .core import (
     AuthenticationError,
     AuthorizationError,
+    BulkheadFullError,
     CircuitBreakerOpenError,
     ConnectionError,
     ErrorContext,
@@ -33,6 +36,8 @@ from .core import (
     RequestContext,
 )
 from .sync import (
+    Bulkhead,
+    BulkheadRegistry,
     CircuitBreakerRegistry,
     Interceptor,
     RestClient,
@@ -47,6 +52,11 @@ __all__ = [
     "AsyncCircuitBreakerRegistry",
     # Circuit breakers (async)
     "AsyncCircuitBreaker",
+    # Bulkheads
+    "Bulkhead",
+    "BulkheadRegistry",
+    "AsyncBulkhead",
+    "AsyncBulkheadRegistry",
     # Errors
     "RestClientError",
     "RequestValidationError",
@@ -62,6 +72,7 @@ __all__ = [
     "AuthorizationError",
     "ResourceNotFoundError",
     "CircuitBreakerOpenError",
+    "BulkheadFullError",
     "ErrorContext",
     # Interceptors (sync)
     "Interceptor",
@@ -73,4 +84,4 @@ __all__ = [
     "ResponseContext",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

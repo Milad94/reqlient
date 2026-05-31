@@ -14,6 +14,7 @@ from pybreaker import CircuitBreakerError as PybreakerError
 from ..core.errors import (
     AuthenticationError,
     AuthorizationError,
+    BulkheadFullError,
     ErrorContext,
     RateLimitError,
     RequestError,
@@ -32,6 +33,7 @@ from ..core.errors import (
 from ..core.errors import (
     ConnectionError as CustomConnectionError,
 )
+from .bulkhead import Bulkhead
 from .interceptors import Interceptor
 from ..core.request_response import RequestContext, RequestT, ResponseContext, ResponseT
 from ..core.utils import sanitize_sensitive_data
@@ -333,6 +335,40 @@ class HttpBehavior(Behavior):
     def _handle_next(self, request: RequestContext) -> ResponseContext:
         # HttpBehavior is the end of the line, it should not call next.
         raise NotImplementedError("HttpBehavior should be the last in the chain.")
+
+
+class BulkheadBehavior(Behavior):
+    """Behavior implementing the bulkhead (concurrency isolation) pattern.
+
+    It acquires a slot from a shared, injected :class:`Bulkhead` before letting
+    the request proceed, and releases it afterwards. If no slot is available it
+    raises :class:`BulkheadFullError` without calling the rest of the pipeline.
+
+    This is placed *outside* the circuit breaker in the pipeline so that a full
+    bulkhead (local overload) is never counted as a downstream failure by the
+    breaker, and so requests that fail earlier (e.g. request validation) do not
+    consume a concurrency slot.
+    """
+
+    def __init__(self, bulkhead: Bulkhead, **kwargs):
+        super().__init__(**kwargs)
+        self.bulkhead = bulkhead
+
+    def handle(self, request: RequestContext) -> ResponseContext:
+        """Acquire a concurrency slot, run the request, then release the slot."""
+        if not self.bulkhead.try_acquire():
+            error_context = _create_error_context(
+                request, Exception("Bulkhead is full")
+            )
+            raise BulkheadFullError(
+                f"Bulkhead for '{self.bulkhead.service_name}' is full "
+                f"(max {self.bulkhead.max_concurrent} concurrent requests)",
+                context=error_context,
+            )
+        try:
+            return self._handle_next(request)
+        finally:
+            self.bulkhead.release()
 
 
 class CircuitBreakerBehavior(Behavior):

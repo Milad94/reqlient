@@ -5,6 +5,29 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0]
+
+### Added
+
+- **Bulkhead (concurrency isolation) pattern.** Both `RestClient` and
+  `AsyncRestClient` can now cap the number of concurrent in-flight requests to a
+  service, so a slow or failing dependency cannot exhaust local resources and
+  starve calls to other services. It is **opt-in** (`use_bulkhead=False` by
+  default), so existing behavior is unchanged.
+  - New config on both clients: `use_bulkhead`, `max_concurrent_requests`,
+    `bulkhead_max_wait` (seconds to wait for a slot before rejecting; `0` =
+    reject immediately), and an explicit `bulkhead=` injection point.
+  - New `Bulkhead`/`BulkheadRegistry` and `AsyncBulkhead`/`AsyncBulkheadRegistry`
+    (in-memory, per-service semaphores; bulkheads protect *local* resources, so
+    state is intentionally per-process — not Redis-backed). Configure registry
+    defaults via `BulkheadRegistry.configure(...)`.
+  - New `BulkheadFullError` (a `RestClientError`, intentionally **not**
+    retryable) raised when the bulkhead is full.
+  - **Pipeline placement:** the bulkhead sits *outside* the circuit breaker, so a
+    full bulkhead (local overload) is never counted as a downstream failure that
+    would trip the breaker, and requests that fail request-validation do not
+    consume a concurrency slot.
+
 ## [0.2.0]
 
 ### Changed

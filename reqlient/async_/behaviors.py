@@ -8,11 +8,13 @@ from typing import Any, Dict, Generic, List, Optional, Set, Type, get_origin
 import httpx
 from pydantic import TypeAdapter
 
+from .bulkhead import AsyncBulkhead
 from .circuit_breakers import AsyncCircuitBreaker
 from .interceptors import AsyncInterceptor
 from ..core.errors import (
     AuthenticationError,
     AuthorizationError,
+    BulkheadFullError,
     CircuitBreakerOpenError,
     ErrorContext,
     RateLimitError,
@@ -332,6 +334,38 @@ class AsyncHttpBehavior(AsyncBehavior):
     async def _handle_next(self, request: RequestContext) -> ResponseContext:
         # AsyncHttpBehavior is the end of the line, it should not call next.
         raise NotImplementedError("AsyncHttpBehavior should be the last in the chain.")
+
+
+class AsyncBulkheadBehavior(AsyncBehavior):
+    """Async behavior implementing the bulkhead (concurrency isolation) pattern.
+
+    Acquires a slot from a shared, injected :class:`AsyncBulkhead` before letting
+    the request proceed, and releases it afterwards. If no slot is available it
+    raises :class:`BulkheadFullError` without calling the rest of the pipeline.
+
+    Placed *outside* the circuit breaker so a full bulkhead (local overload) is
+    never counted as a downstream failure by the breaker.
+    """
+
+    def __init__(self, bulkhead: AsyncBulkhead, **kwargs):
+        super().__init__(**kwargs)
+        self.bulkhead = bulkhead
+
+    async def handle(self, request: RequestContext) -> ResponseContext:
+        """Acquire a concurrency slot, run the request, then release the slot."""
+        if not await self.bulkhead.try_acquire():
+            error_context = _create_error_context(
+                request, Exception("Bulkhead is full")
+            )
+            raise BulkheadFullError(
+                f"Bulkhead for '{self.bulkhead.service_name}' is full "
+                f"(max {self.bulkhead.max_concurrent} concurrent requests)",
+                context=error_context,
+            )
+        try:
+            return await self._handle_next(request)
+        finally:
+            self.bulkhead.release()
 
 
 class AsyncCircuitBreakerBehavior(AsyncBehavior):

@@ -3,6 +3,7 @@
 from .errors import (
     AuthenticationError,
     AuthorizationError,
+    BulkheadFullError,
     CircuitBreakerOpenError,
     ConnectionError,
     ErrorContext,
@@ -35,6 +36,7 @@ __all__ = [
     "AuthorizationError",
     "ResourceNotFoundError",
     "CircuitBreakerOpenError",
+    "BulkheadFullError",
     "ErrorContext",
     # Request/Response
     "RequestContext",
