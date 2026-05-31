@@ -26,7 +26,8 @@ This module provides a `RestClient` that abstracts away the complexities of API 
 -   **Type-Safe**: Uses Pydantic models for compile-time validation of request and response objects.
 -   **Behavior-Based Pipeline**: A Chain of Responsibility pattern processes requests through modular "behaviors."
 -   **Automatic Retries**: Configurable exponential backoff for transient network errors and specific HTTP status codes.
--   **Circuit Breaker**: Protects your application from failing services using a Redis-backed circuit breaker (`pybreaker`).
+-   **Circuit Breaker**: Protects your application from failing services using a circuit breaker (`pybreaker`), with optional Redis-backed shared state (in-memory fallback).
+-   **Bulkhead**: Caps concurrent in-flight requests per service (in-memory) so a slow dependency can't exhaust local resources and starve other services.
 -   **Idempotency Headers**: Automatically adds idempotency keys to POST/PUT/DELETE requests for safe retries.
 -   **Rich Error Handling**: A detailed custom exception hierarchy for precise error handling.
 -   **Structured Logging**: Logs sanitized request/response data for debugging and monitoring.
@@ -492,6 +493,51 @@ critical_client = RestClient(
 )
 ```
 
+### Isolating Failures with a Bulkhead
+
+The **Bulkhead** pattern limits how many requests can be in flight to a single service at once. Named after the watertight compartments in a ship's hull, it stops a slow or failing dependency from consuming all of your local resources (threads, sockets, connection-pool slots) and starving calls to *other* services.
+
+-   **Why use it?** A downstream that becomes slow — not necessarily failing, just slow — can tie up every worker waiting on it. A bulkhead caps the concurrency for that one service, so the rest of your application keeps flowing.
+-   **How it works:** Each service gets an in-memory semaphore of `max_concurrent` permits. A request acquires a permit before it runs and releases it afterwards. If no permit is available it either waits up to `max_wait` seconds or, by default (`max_wait=0`), is rejected immediately with a `BulkheadFullError`.
+-   **In-memory by design:** unlike the circuit breaker, a bulkhead protects *this process's* resources, so its state is per-process and intentionally not Redis-backed.
+
+The bulkhead is **disabled by default** — enable it by passing a `BulkheadConfig`:
+
+```python
+from reqlient import RestClient, BulkheadConfig
+
+client = RestClient(
+    base_url="https://api.example.com/v1",
+    service_name="user_api",
+    bulkhead=BulkheadConfig(
+        max_concurrent=10,  # at most 10 concurrent in-flight requests
+        max_wait=0.0,       # 0 = reject immediately when full; >0 = wait this many seconds
+    ),
+)
+```
+
+In the pipeline the bulkhead sits **outside** the circuit breaker: a full bulkhead signals *local* overload, so a `BulkheadFullError` is never counted as a downstream failure that would trip the breaker. Clients sharing the same `service_name` share one bulkhead (resolved from the `BulkheadRegistry`), and you can set process-wide defaults once at startup:
+
+```python
+from reqlient import BulkheadRegistry
+
+BulkheadRegistry.configure(default_max_concurrent=20, default_max_wait=0.0)
+```
+
+`BulkheadFullError` is a `RestClientError` and is intentionally **not** retryable (retrying immediately would not free a slot), so handle it explicitly if you want to shed load gracefully:
+
+```python
+from reqlient import BulkheadFullError
+
+try:
+    user = client.get("/users/1", response_data_schema=User)
+except BulkheadFullError:
+    # Too many concurrent requests to this service — back off or return a cached value
+    ...
+```
+
+The async client works the same way via `AsyncRestClient(..., bulkhead=BulkheadConfig(...))` and the `AsyncBulkheadRegistry`.
+
 ### Idempotency Headers
 
 The client automatically adds `X-Idempotency-Key` headers to POST/PUT/DELETE requests to ensure safe retries. This prevents duplicate operations if a request is retried due to network issues.
@@ -882,7 +928,10 @@ async with AsyncRestClient(
 The client raises specific exceptions, allowing for fine-grained error handling.
 
 ```python
-from reqlient import RateLimitError, ServerError, RestClientError, CircuitBreakerOpenError
+from reqlient import (
+    RateLimitError, ServerError, RestClientError,
+    CircuitBreakerOpenError, BulkheadFullError,
+)
 
 try:
     # ... make a request ...
@@ -890,6 +939,10 @@ except CircuitBreakerOpenError as e:
     # The request was blocked by the circuit breaker.
     # This is a good place to log that the external service is down.
     print(f"Failing fast! The circuit breaker is open for this service: {e}")
+except BulkheadFullError as e:
+    # Too many concurrent requests to this service (local overload, not a
+    # downstream failure). Not retryable — shed load or return a cached value.
+    print(f"Bulkhead full for this service: {e}")
 except RateLimitError as e:
     # The client has already waited for the 'Retry-After' header.
     # You might want to log this or re-queue the task for later.
