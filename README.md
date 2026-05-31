@@ -26,7 +26,7 @@ This module provides a `RestClient` that abstracts away the complexities of API 
 -   **Fluent Interface**: Simple, clean methods for `get`, `post`, `put`, `patch`, and `delete`.
 -   **Type-Safe**: Uses Pydantic models for compile-time validation of request and response objects.
 -   **Behavior-Based Pipeline**: A Chain of Responsibility pattern processes requests through modular "behaviors."
--   **Automatic Retries**: Configurable exponential backoff for transient network errors and specific HTTP status codes.
+-   **Automatic Retries**: Configurable exponential backoff (with equal jitter) for transient network errors and specific HTTP status codes. Honors the server's `Retry-After` header on `429`/`503` responses.
 -   **Circuit Breaker**: Protects your application from failing services using a circuit breaker (`pybreaker`), with optional Redis-backed shared state (in-memory fallback).
 -   **Bulkhead**: Caps concurrent in-flight requests per service (in-memory) so a slow dependency can't exhaust local resources and starve other services.
 -   **Idempotency Headers**: Automatically adds idempotency keys to POST/PUT/PATCH/DELETE requests for safe retries.
@@ -676,9 +676,10 @@ except BulkheadFullError as e:
     # downstream failure). Not retryable — shed load or return a cached value.
     print(f"Bulkhead full for this service: {e}")
 except RateLimitError as e:
-    # Raised on HTTP 429 after retries (with exponential backoff) are exhausted.
-    # Note: the server's 'Retry-After' header is not yet honored — backoff is
-    # purely exponential. Log this or re-queue the task for later.
+    # Raised on HTTP 429 after retries are exhausted. Between attempts the client
+    # honors the server's 'Retry-After' header when present (seconds or HTTP-date),
+    # and otherwise backs off exponentially with equal jitter to avoid a
+    # thundering herd. Log this or re-queue the task for later.
     print(f"Rate limited. The request will need to be tried again later. Details: {e}")
 except ServerError as e:
     # The service is likely down; retries have already been attempted.

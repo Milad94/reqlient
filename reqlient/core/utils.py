@@ -1,6 +1,47 @@
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 from pydantic import BaseModel
+
+
+def parse_retry_after(headers: dict[str, str] | None) -> float | None:
+    """Parse the ``Retry-After`` header into a delay in seconds.
+
+    Per RFC 9110 the value is either a non-negative integer number of seconds or
+    an HTTP-date. Returns the delay in seconds (clamped to ``>= 0``), or ``None``
+    if the header is absent or cannot be parsed.
+    """
+    if not headers:
+        return None
+
+    # Header names may arrive with any casing depending on the HTTP layer.
+    value: str | None = None
+    for k, v in headers.items():
+        if k.lower() == "retry-after":
+            value = v
+            break
+    if value is None:
+        return None
+
+    value = value.strip()
+    # delta-seconds form
+    try:
+        return max(0.0, float(int(value)))
+    except ValueError:
+        pass
+
+    # HTTP-date form
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    delta = (when - datetime.now(UTC)).total_seconds()
+    return max(0.0, delta)
 
 
 def sanitize_sensitive_data(data: Any, sensitive_fields: set[str] | None = None) -> Any:

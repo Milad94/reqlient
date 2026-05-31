@@ -1,10 +1,30 @@
 import logging
 import threading
+from typing import TYPE_CHECKING, Any
 
-import redis
 from pybreaker import STATE_CLOSED, CircuitBreaker, CircuitRedisStorage
 
+if TYPE_CHECKING:
+    import redis
+
 logger = logging.getLogger(__name__)
+
+
+def _import_redis() -> Any:
+    """Import the optional ``redis`` dependency, with a helpful error if missing.
+
+    ``redis`` is an optional extra (``reqlient[redis]``); it is only needed when a
+    Redis URL is supplied for shared circuit-breaker state. Importing it lazily
+    keeps the base install working without redis installed.
+    """
+    try:
+        import redis
+    except ImportError as e:  # pragma: no cover - exercised only without the extra
+        raise ImportError(
+            "Redis-backed circuit breakers require the optional 'redis' dependency. "
+            "Install it with: pip install reqlient[redis]"
+        ) from e
+    return redis
 
 
 class CircuitBreakerRegistry:
@@ -36,7 +56,7 @@ class CircuitBreakerRegistry:
     _default_fail_max: int = 5
     _default_reset_timeout: int = 60
     _breakers: dict[str, CircuitBreaker] = {}
-    _redis_client: redis.Redis | None = None
+    _redis_client: "redis.Redis | None" = None
     _configured: bool = False
     _lock: threading.Lock = threading.Lock()
 
@@ -66,6 +86,7 @@ class CircuitBreakerRegistry:
         # Initialize Redis client if URL provided
         if redis_url:
             try:
+                redis = _import_redis()
                 cls._redis_client = redis.from_url(redis_url)
                 cls._redis_client.ping()
                 logger.info(f"CircuitBreakerRegistry connected to Redis at {redis_url}")

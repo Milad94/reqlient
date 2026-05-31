@@ -5,6 +5,33 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0]
+
+### Fixed
+
+- **The base install no longer crashes on `import reqlient` when `redis` is not
+  installed.** The `redis` package is an optional extra (`reqlient[redis]`) but
+  was imported unconditionally at module load in both the sync and async circuit
+  breaker modules, so `import reqlient` raised `ModuleNotFoundError: redis` on a
+  plain install. `redis` is now imported lazily and only when a `redis_url` is
+  actually configured; if it is missing, a clear "install reqlient[redis]"
+  message is surfaced and the registry falls back to in-memory state.
+
+- **The sync `RestClient` now releases its connection pools.** It gained a
+  `close()` method and context-manager support (`with RestClient(...) as client:`),
+  closing every per-thread `httpx.Client` it created. Previously the thread-local
+  sessions were never closed, leaking sockets. (The async client already
+  supported `aclose()` / `async with`.)
+
+### Added
+
+- **Retries now honor the server's `Retry-After` header** on `429`/`503`
+  responses (both delta-seconds and HTTP-date forms) before falling back to
+  computed backoff.
+- **Backoff now uses equal jitter** (`base/2 + rand(0, base/2)`) instead of a
+  fixed exponential delay, spreading retries across clients to avoid a
+  synchronized thundering herd against a recovering service.
+
 ## [0.4.0]
 
 ### Changed (breaking)

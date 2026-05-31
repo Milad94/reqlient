@@ -2,7 +2,7 @@
 Comprehensive tests for all behaviors in the pipeline.
 """
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -431,6 +431,79 @@ class TestRetryBehavior:
         result = behavior.handle(request)
         assert result == mock_response
         assert mock_next.handle.call_count == 1
+
+    def test_honors_retry_after_header_on_status_retry(self):
+        """A Retry-After header on a retryable response must drive the sleep time."""
+        request = RequestContext(
+            method="GET",
+            url="https://api.example.com/v1/users/1",
+            headers={},
+            params=None,
+            data=None,
+        )
+        mock_next = MagicMock()
+        mock_next.handle.side_effect = [
+            ResponseContext(
+                status_code=503,
+                headers={"Retry-After": "7"},
+                data=None,
+                request=request,
+            ),
+            ResponseContext(
+                status_code=200,
+                headers={},
+                data={"id": 1, "name": "John", "email": "john@example.com"},
+                request=request,
+            ),
+        ]
+
+        behavior = RetryBehavior(
+            max_retries=2,
+            backoff_factor=0.5,
+            retry_status_codes={503},
+            next_behavior=mock_next,
+        )
+
+        with patch("reqlient.sync.behaviors.time.sleep") as mock_sleep:
+            result = behavior.handle(request)
+
+        assert result.status_code == 200
+        # The server said "wait 7 seconds" — that exact value must be used, no jitter.
+        mock_sleep.assert_called_once_with(7.0)
+
+    def test_backoff_uses_equal_jitter_without_retry_after(self):
+        """Without Retry-After, the wait is bounded by equal jitter: [base/2, base]."""
+        request = RequestContext(
+            method="GET",
+            url="https://api.example.com/v1/users/1",
+            headers={},
+            params=None,
+            data=None,
+        )
+        mock_next = MagicMock()
+        mock_next.handle.side_effect = [
+            ResponseContext(status_code=500, headers={}, data=None, request=request),
+            ResponseContext(
+                status_code=200,
+                headers={},
+                data={"id": 1, "name": "John", "email": "john@example.com"},
+                request=request,
+            ),
+        ]
+
+        behavior = RetryBehavior(
+            max_retries=2,
+            backoff_factor=0.5,
+            retry_status_codes={500},
+            next_behavior=mock_next,
+        )
+
+        with patch("reqlient.sync.behaviors.time.sleep") as mock_sleep:
+            behavior.handle(request)
+
+        # base = 0.5 * 2**0 = 0.5; equal jitter -> wait in [0.25, 0.5].
+        (wait,), _ = mock_sleep.call_args
+        assert 0.25 <= wait <= 0.5
 
 
 class TestIdempotencyHeaderBehavior:

@@ -87,6 +87,10 @@ class RestClient(Generic[RequestT, ResponseT]):
         # another. It stays thread-local so each thread gets its own connection
         # pool.
         self._thread_local = threading.local()
+        # Track every per-thread session so close() can release all of them, not
+        # just the calling thread's. Guarded by its own lock.
+        self._sessions: list[httpx.Client] = []
+        self._sessions_lock = threading.Lock()
 
         # Resolve the shared circuit breaker / bulkhead from their registries
         # (keyed by service_name), or None when the policy is disabled.
@@ -133,12 +137,35 @@ class RestClient(Generic[RequestT, ResponseT]):
         ``requests``, does not accept ``verify`` as a per-request argument.
         """
         if not hasattr(self._thread_local, "session"):
-            self._thread_local.session = httpx.Client(
+            session = httpx.Client(
                 verify=self.transport.verify_ssl,
                 timeout=self.transport.timeout,
                 follow_redirects=True,
             )
+            self._thread_local.session = session
+            with self._sessions_lock:
+                self._sessions.append(session)
         return self._thread_local.session
+
+    def close(self) -> None:
+        """Close all per-thread httpx clients and their connection pools.
+
+        Safe to call multiple times. After closing, accessing :attr:`session`
+        again on any thread will lazily create a fresh client.
+        """
+        with self._sessions_lock:
+            sessions, self._sessions = self._sessions, []
+        for session in sessions:
+            session.close()
+        # Drop the calling thread's cached session so a later call rebuilds it.
+        if hasattr(self._thread_local, "session"):
+            del self._thread_local.session
+
+    def __enter__(self) -> "RestClient":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
 
     def __build_read_pipeline(
         self,

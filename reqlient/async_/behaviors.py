@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import random
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Collection
@@ -30,10 +31,27 @@ from ..core.errors import (
     ConnectionError as CustomConnectionError,
 )
 from ..core.request_response import RequestContext, RequestT, ResponseContext, ResponseT
-from ..core.utils import sanitize_sensitive_data
+from ..core.utils import parse_retry_after, sanitize_sensitive_data
 from .bulkhead import AsyncBulkhead
 from .circuit_breakers import AsyncCircuitBreaker
 from .interceptors import AsyncInterceptor
+
+
+def _compute_backoff(
+    retry_count: int, backoff_factor: float, retry_after: float | None
+) -> float:
+    """Compute how long to wait before the next retry attempt.
+
+    If the server sent a ``Retry-After`` value, honor it exactly (no jitter) — the
+    server is telling us precisely when to come back. Otherwise use exponential
+    backoff with *equal jitter* (``base/2 + rand(0, base/2)``) to spread retries
+    from many clients and avoid a synchronized thundering herd.
+    """
+    if retry_after is not None:
+        return retry_after
+    base = backoff_factor * (2 ** (retry_count - 1))
+    # Non-cryptographic jitter — randomness only spreads retry timing across clients.
+    return base / 2 + random.uniform(0, base / 2)  # noqa: S311
 
 
 def _create_error_context(
@@ -246,9 +264,11 @@ class AsyncRetryBehavior(AsyncBehavior):
                             f"Max retries ({max_retries}) exceeded for status code {response.status_code}",
                             context=error_context,
                         )
-                    # Increment retry count and wait before retrying
+                    # Increment retry count and wait before retrying, honoring
+                    # any Retry-After hint the server sent on this response.
                     retry_count += 1
-                    wait_time = backoff_factor * (2 ** (retry_count - 1))
+                    retry_after = parse_retry_after(response.headers)
+                    wait_time = _compute_backoff(retry_count, backoff_factor, retry_after)
                     await asyncio.sleep(wait_time)
                     continue
 
@@ -267,7 +287,12 @@ class AsyncRetryBehavior(AsyncBehavior):
                     # Max retries exceeded, re-raise the last error
                     break
                 retry_count += 1
-                wait_time = backoff_factor * (2 ** (retry_count - 1))
+                # A 429/503 raised as an exception still carries the response
+                # headers in its context; honor Retry-After when present.
+                retry_after = (
+                    parse_retry_after(e.context.response_headers) if e.context else None
+                )
+                wait_time = _compute_backoff(retry_count, backoff_factor, retry_after)
                 await asyncio.sleep(wait_time)
                 continue
 

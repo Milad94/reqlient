@@ -219,7 +219,12 @@ class TestRedisBackedCircuitBreaker:
         fake_redis.ping.return_value = True
         fake_redis.get.return_value = None  # no existing state stored
 
-        with patch.object(cb_mod.redis, "from_url", return_value=fake_redis):
+        # ``redis`` is now imported lazily (it is an optional extra), so patch the
+        # lazy importer to hand back a stub module instead of the real package.
+        fake_redis_module = MagicMock()
+        fake_redis_module.from_url.return_value = fake_redis
+
+        with patch.object(cb_mod, "_import_redis", return_value=fake_redis_module):
             CircuitBreakerRegistry.configure(redis_url="redis://localhost:6379/0")
             breaker = CircuitBreakerRegistry.get("redis_service", fail_max=3, reset_timeout=5)
 

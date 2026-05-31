@@ -3,13 +3,31 @@ import logging
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from typing import Any
-
-import redis.asyncio as aioredis
+from typing import TYPE_CHECKING, Any
 
 from ..core.errors import CircuitBreakerOpenError, RetryableError
 
+if TYPE_CHECKING:
+    import redis.asyncio as aioredis
+
 logger = logging.getLogger(__name__)
+
+
+def _import_aioredis() -> Any:
+    """Import the optional ``redis.asyncio`` dependency, with a helpful error if missing.
+
+    ``redis`` is an optional extra (``reqlient[redis]``); it is only needed when a
+    Redis URL is supplied for shared circuit-breaker state. Importing it lazily
+    keeps the base install working without redis installed.
+    """
+    try:
+        import redis.asyncio as aioredis
+    except ImportError as e:  # pragma: no cover - exercised only without the extra
+        raise ImportError(
+            "Redis-backed circuit breakers require the optional 'redis' dependency. "
+            "Install it with: pip install reqlient[redis]"
+        ) from e
+    return aioredis
 
 # Circuit breaker states
 CLOSED = "closed"
@@ -367,7 +385,7 @@ class AsyncCircuitBreakerRegistry:
     _default_fail_max: int = 5
     _default_reset_timeout: int = 60
     _breakers: dict[str, AsyncCircuitBreaker] = {}
-    _redis_client: aioredis.Redis | None = None
+    _redis_client: "aioredis.Redis | None" = None
     _configured: bool = False
 
     @classmethod
@@ -396,6 +414,7 @@ class AsyncCircuitBreakerRegistry:
         # Initialize Redis client if URL provided
         if redis_url:
             try:
+                aioredis = _import_aioredis()
                 cls._redis_client = await aioredis.from_url(redis_url)
                 await cls._redis_client.ping()  # type: ignore[misc]  # redis-py sync/async union
                 logger.info(f"AsyncCircuitBreakerRegistry connected to Redis at {redis_url}")

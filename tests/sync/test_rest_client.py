@@ -471,8 +471,9 @@ class TestRestClientRetry:
         elapsed = time.time() - start_time
 
         assert response is not None
-        # Should have waited at least the backoff time
-        assert elapsed >= 0.1
+        # Backoff uses equal jitter (base/2 + rand(0, base/2)), so for the first
+        # retry with backoff_factor=0.1 the wait is at least base/2 = 0.05s.
+        assert elapsed >= 0.05
 
     def test_no_retry_on_non_retryable_status(self, basic_client, requests_mock):
         """Test that non-retryable status codes don't trigger retries."""
@@ -519,6 +520,62 @@ class TestRestClientThreadSafety:
         # Each thread should have its own session
         assert len(sessions) == 2
         assert sessions[0] is not sessions[1]
+
+
+class TestRestClientClose:
+    """Test resource cleanup via close() and the context-manager protocol."""
+
+    def test_close_releases_all_thread_sessions(self, basic_client):
+        """close() must close every per-thread httpx client, not just the caller's."""
+        import threading
+
+        sessions = []
+
+        def open_session():
+            sessions.append(basic_client.session)
+
+        threads = [threading.Thread(target=open_session) for _ in range(3)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # The main thread also opens one.
+        main_session = basic_client.session
+        assert all(not s.is_closed for s in sessions)
+        assert not main_session.is_closed
+
+        basic_client.close()
+
+        for s in sessions:
+            assert s.is_closed
+        assert main_session.is_closed
+
+    def test_close_is_idempotent(self, basic_client):
+        """Calling close() more than once must not raise."""
+        _ = basic_client.session
+        basic_client.close()
+        basic_client.close()
+
+    def test_session_rebuilt_after_close(self, basic_client):
+        """After close(), accessing .session lazily builds a fresh, open client."""
+        first = basic_client.session
+        basic_client.close()
+        second = basic_client.session
+        assert second is not first
+        assert not second.is_closed
+
+    def test_context_manager_closes_on_exit(self, base_url, mock_logger):
+        """Using the client as a context manager closes its sessions on exit."""
+        with RestClient(
+            base_url=base_url,
+            service_name="ctx_service",
+            logger=mock_logger,
+            circuit_breaker=None,
+        ) as client:
+            session = client.session
+            assert not session.is_closed
+        assert session.is_closed
 
 
 class TestRestClientTransport:
