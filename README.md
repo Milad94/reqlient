@@ -2,7 +2,7 @@
 
 A production-grade, extensible, and resilient HTTP client for Python, designed for reliable communication with external REST APIs.
 
-This module provides a `RestClient` that abstracts away the complexities of API communication, allowing developers to focus on business logic instead of boilerplate code for retries, logging, validation, and error handling. It is built on Python's `requests` library and heavily inspired by middleware patterns.
+This module provides a `RestClient` that abstracts away the complexities of API communication, allowing developers to focus on business logic instead of boilerplate code for retries, logging, validation, and error handling. It is built on `httpx` (for both the sync and async clients) and heavily inspired by middleware patterns.
 
 ## Table of Contents
 
@@ -37,27 +37,30 @@ This module provides a `RestClient` that abstracts away the complexities of API 
 
 ### Runtime Dependencies
 
--   `requests>=2.31.0`
--   `pydantic>=2.0.0`
--   `pybreaker>=1.0.0`
+-   `httpx>=0.28.1`
+-   `pydantic>=2.12.4`
+-   `pybreaker>=1.4.1`
 
 ### Optional Dependencies
 
--   `redis>=4.5.0` (for Redis-backed circuit breaker)
--   `httpx>=0.24.0` and `redis[asyncio]>=4.5.0` (for async support)
+-   `redis>=7.0.1` (for Redis-backed circuit breaker)
 
 ### Installation
 
 ```bash
-# Basic installation
+# Basic installation (includes both the sync and async clients)
 pip install reqlient
 
-# With async support
-pip install reqlient[async]
+# With Redis-backed circuit breaker support
+pip install reqlient[redis]
 
 # With all optional dependencies
 pip install reqlient[all]
 ```
+
+> Async support is included in the base install (the async client is built on
+> `httpx`, which is now a runtime dependency). The `reqlient[async]` extra is
+> retained for backward compatibility but is no longer required.
 
 Or using `uv`:
 
@@ -280,7 +283,7 @@ get_user_by_id(123)
 
 ## Async Quick Start
 
-reqflow also provides full async support using `httpx` and native async/await patterns.
+reqlient also provides full async support using `httpx` and native async/await patterns.
 
 ### Installation
 
@@ -334,7 +337,7 @@ asyncio.run(main())
 
 ## How It Works: Dual Pipeline Architecture
 
-ReqFlow uses two optimized behavior pipelines to maximize performance and clarity:
+reqlient uses two optimized behavior pipelines to maximize performance and clarity:
 
 - **Read Pipeline** (GET, HEAD): Optimized for read operations
 - **Write Pipeline** (POST, PUT, PATCH, DELETE): Optimized for write operations with idempotency headers
@@ -681,7 +684,7 @@ pytest tests/test_rest_client.py::TestRestClientGet
 pytest tests/test_rest_client.py::TestRestClientGet::test_successful_get
 
 # Run with coverage
-pytest --cov=reqflow --cov-report=html
+pytest --cov=reqlient --cov-report=html
 
 # Run tests in parallel
 pytest -n auto
@@ -741,7 +744,9 @@ When adding new features, follow these guidelines:
 
 1. **Test Structure**: Follow the existing pattern with test classes grouping related tests
 2. **Fixtures**: Use fixtures from `conftest.py` when possible
-3. **Mocking**: Use `requests_mock` for HTTP mocking, `MagicMock` for other mocks
+3. **Mocking**: Use the `requests_mock` fixture for HTTP mocking (it is backed by
+   `respx`/`httpx` under the hood and exposes a small requests_mock-style API),
+   and `MagicMock` for other mocks
 4. **Assertions**: Use descriptive assertions and check both success and error cases
 5. **Edge Cases**: Always test edge cases (None values, empty strings, boundary conditions)
 
