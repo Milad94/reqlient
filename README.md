@@ -28,7 +28,7 @@ This module provides a `RestClient` that abstracts away the complexities of API 
 -   **Automatic Retries**: Configurable exponential backoff for transient network errors and specific HTTP status codes.
 -   **Circuit Breaker**: Protects your application from failing services using a circuit breaker (`pybreaker`), with optional Redis-backed shared state (in-memory fallback).
 -   **Bulkhead**: Caps concurrent in-flight requests per service (in-memory) so a slow dependency can't exhaust local resources and starve other services.
--   **Idempotency Headers**: Automatically adds idempotency keys to POST/PUT/DELETE requests for safe retries.
+-   **Idempotency Headers**: Automatically adds idempotency keys to POST/PUT/PATCH/DELETE requests for safe retries.
 -   **Rich Error Handling**: A detailed custom exception hierarchy for precise error handling.
 -   **Structured Logging**: Logs sanitized request/response data for debugging and monitoring.
 
@@ -66,8 +66,7 @@ pip install reqlient[all]
 Or using `uv`:
 
 ```bash
-uv add reqlient
-uv add reqlient[async]  # For async support
+uv add reqlient   # sync + async clients both included
 ```
 
 ---
@@ -159,20 +158,24 @@ reqlient/
 ├── pyproject.toml          # Project configuration (PEP 621)
 ├── uv.lock                 # Locked dependencies (uv)
 ├── Justfile                # Task runner commands
+├── CHANGELOG.md            # Release notes
 ├── reqlient/               # Source code
 │   ├── __init__.py         # Main exports
 │   ├── core/               # Shared modules
+│   │   ├── config.py       # Config objects (Transport/Retry/CircuitBreaker/Bulkhead)
 │   │   ├── errors.py       # Error types
 │   │   └── request_response.py
 │   ├── sync/               # Synchronous client
 │   │   ├── rest_client.py
 │   │   ├── behaviors.py
 │   │   ├── circuit_breakers.py
+│   │   ├── bulkhead.py
 │   │   └── interceptors.py
 │   └── async_/             # Asynchronous client
 │       ├── rest_client.py
 │       ├── behaviors.py
 │       ├── circuit_breakers.py
+│       ├── bulkhead.py
 │       └── interceptors.py
 └── tests/                  # Test suite
     ├── conftest.py
@@ -187,7 +190,7 @@ This project uses **ruff** for formatting and linting. Configuration is in `pypr
 
 - Line length: 100 characters
 - Quote style: Double quotes
-- Target Python: 3.9+
+- Target Python: 3.12+
 
 ---
 
@@ -304,13 +307,7 @@ get_user_by_id(123)
 
 ## Async Quick Start
 
-reqlient also provides full async support using `httpx` and native async/await patterns.
-
-### Installation
-
-```bash
-pip install reqlient[async]
-```
+reqlient also provides full async support using `httpx` and native async/await patterns — included in the base install, no extra required.
 
 ### Basic Async Usage
 
@@ -352,7 +349,7 @@ asyncio.run(main())
 - All methods are `async def` and must be awaited
 - Use `async with` for proper resource cleanup
 - Use `AsyncInterceptor` for interceptors
-- Idempotency headers are automatically added to POST/PUT/PATCH requests
+- Idempotency headers are automatically added to POST/PUT/PATCH/DELETE requests
 
 ---
 
@@ -720,13 +717,16 @@ Tests are located in the `tests/` directory and use pytest. The test suite is de
 
 ### Test Structure
 
-- `test_rest_client.py` - Tests for the main RestClient class (all HTTP methods, error handling, edge cases)
-- `test_behaviors.py` - Tests for all behaviors in the pipeline (retry, validation, circuit breaker, etc.)
-- `test_circuit_breaker.py` - Tests for circuit breaker functionality
-- `test_interceptors.py` - Tests for interceptor functionality
-- `test_errors.py` - Tests for error handling and error context
-- `test_integration.py` - Integration tests for the full pipeline
-- `conftest.py` - Shared fixtures and test configuration
+Tests are organized under `tests/sync/`, `tests/async_/`, and `tests/core/`:
+
+- `sync/test_rest_client.py`, `async_/test_rest_client.py` - the RestClient / AsyncRestClient (all HTTP methods, error handling, edge cases)
+- `sync/test_behaviors.py`, `async_/test_async_behaviors.py` - pipeline behaviors (retry, validation, etc.)
+- `sync/test_circuit_breaker.py`, `async_/test_async_circuit_breaker.py` - circuit breaker functionality
+- `sync/test_bulkhead.py`, `async_/test_async_bulkhead.py` - bulkhead (concurrency isolation)
+- `sync/test_interceptors.py` - interceptor functionality
+- `test_errors.py` - error handling and error context
+- `test_integration.py` - integration tests for the full pipeline
+- `conftest.py` - shared fixtures and test configuration
 
 ### Running Tests
 
@@ -751,16 +751,16 @@ Or using pytest directly:
 pytest
 
 # Run specific test files
-pytest tests/test_rest_client.py
-pytest tests/test_behaviors.py
+pytest tests/sync/test_rest_client.py
+pytest tests/sync/test_behaviors.py
 pytest tests/test_integration.py
 
 # Run with verbose output
 pytest -v
 
 # Run specific test classes or functions
-pytest tests/test_rest_client.py::TestRestClientGet
-pytest tests/test_rest_client.py::TestRestClientGet::test_successful_get
+pytest tests/sync/test_rest_client.py::TestRestClientGet
+pytest tests/sync/test_rest_client.py::TestRestClientGet::test_successful_get
 
 # Run with coverage
 pytest --cov=reqlient --cov-report=html
@@ -790,12 +790,18 @@ The test suite covers:
    - StatusCodeValidationBehavior
    - HttpBehavior
    - CircuitBreakerBehavior
+   - BulkheadBehavior
    - InterceptorBehavior
 
 3. **Circuit Breaker**
    - Circuit opening/closing
    - Fail-fast behavior
    - Redis fallback
+
+4. **Bulkhead**
+   - Concurrency limiting and fast rejection (`BulkheadFullError`)
+   - Slot release on success and error
+   - Not counted as a circuit-breaker failure
 
 4. **Interceptors**
    - Request/response interception
@@ -804,7 +810,7 @@ The test suite covers:
 
 5. **Idempotency**
    - Automatic header generation
-   - POST/PUT/PATCH only
+   - Mutation methods only (POST/PUT/PATCH/DELETE)
 
 6. **Error Handling**
    - All error types
