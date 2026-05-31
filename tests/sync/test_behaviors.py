@@ -8,16 +8,6 @@ import httpx
 import pytest
 from pydantic import BaseModel
 
-from reqlient.sync.behaviors import (
-    HttpBehavior,
-    IdempotencyHeaderBehavior,
-    InterceptorBehavior,
-    LoggingBehavior,
-    RequestValidationBehavior,
-    ResponseValidationBehavior,
-    RetryBehavior,
-    StatusCodeValidationBehavior,
-)
 from reqlient.core.errors import (
     AuthenticationError,
     AuthorizationError,
@@ -29,8 +19,18 @@ from reqlient.core.errors import (
     StatusCodeError,
     TimeoutError,
 )
-from reqlient.sync.interceptors import Interceptor
 from reqlient.core.request_response import RequestContext, ResponseContext
+from reqlient.sync.behaviors import (
+    HttpBehavior,
+    IdempotencyHeaderBehavior,
+    InterceptorBehavior,
+    LoggingBehavior,
+    RequestValidationBehavior,
+    ResponseValidationBehavior,
+    RetryBehavior,
+    StatusCodeValidationBehavior,
+)
+from reqlient.sync.interceptors import Interceptor
 
 
 class User(BaseModel):

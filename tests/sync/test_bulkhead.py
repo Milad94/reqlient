@@ -8,9 +8,10 @@ import pytest
 
 from reqlient import (
     Bulkhead,
+    BulkheadConfig,
     BulkheadFullError,
     BulkheadRegistry,
-    CircuitBreakerRegistry,
+    CircuitBreakerConfig,
     RestClient,
     ServerError,
 )
@@ -163,9 +164,9 @@ class TestRestClientBulkhead:
             base_url=base_url,
             service_name="no_bulkhead",
             logger=mock_logger,
-            use_circuit_breaker=False,
+            circuit_breaker=None,
         )
-        # No bulkhead registered when use_bulkhead is not set.
+        # No bulkhead registered when no bulkhead config is passed.
         assert "no_bulkhead" not in BulkheadRegistry.get_registered_services()
         assert client.get("/users/1", response_data_schema=User) is not None
 
@@ -178,9 +179,8 @@ class TestRestClientBulkhead:
             base_url=base_url,
             service_name="bh_service",
             logger=mock_logger,
-            use_circuit_breaker=False,
-            use_bulkhead=True,
-            max_concurrent_requests=1,
+            circuit_breaker=None,
+            bulkhead=BulkheadConfig(max_concurrent=1),
         )
 
         # Occupy the single slot on the same shared bulkhead instance.
@@ -202,14 +202,12 @@ class TestRestClientBulkhead:
             json={"id": 1, "name": "John", "email": "john@example.com"},
         )
         # fail_max=1: a single counted failure would open the circuit.
-        breaker = CircuitBreakerRegistry.get("bh_cb", fail_max=1, reset_timeout=5)
         client = RestClient(
             base_url=base_url,
             service_name="bh_cb",
             logger=mock_logger,
-            breaker=breaker,
-            use_bulkhead=True,
-            max_concurrent_requests=1,
+            circuit_breaker=CircuitBreakerConfig(fail_max=1, reset_timeout=5),
+            bulkhead=BulkheadConfig(max_concurrent=1),
         )
 
         bulkhead = BulkheadRegistry.get("bh_cb")

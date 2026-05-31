@@ -9,7 +9,8 @@ import pytest
 from pydantic import BaseModel
 
 from reqlient import AsyncRestClient
-from reqlient.async_.circuit_breakers import AsyncCircuitBreaker
+from reqlient.async_.circuit_breakers import AsyncCircuitBreakerRegistry
+from reqlient.core.config import CircuitBreakerConfig, RetryConfig, TransportConfig
 from reqlient.core.errors import (
     AuthenticationError,
     AuthorizationError,
@@ -17,6 +18,7 @@ from reqlient.core.errors import (
     ConnectionError,
     ResourceNotFoundError,
     RestClientError,
+    ServerError,
     TimeoutError,
 )
 
@@ -54,24 +56,22 @@ class TestAsyncRestClientInitialization:
             assert client.base_url == base_url
             assert client.service_name == "test"
             assert client.logger == mock_logger
-            assert client.timeout == 30
-            assert client.verify_ssl is True
+            assert client.transport.timeout == 30
+            assert client.transport.verify_ssl is True
 
     async def test_custom_configuration(self, base_url, mock_logger):
         """Test AsyncRestClient with custom configuration."""
+        transport = TransportConfig(timeout=60, verify_ssl=False)
         async with AsyncRestClient(
             base_url=base_url,
             service_name="test",
             logger=mock_logger,
-            timeout=60,
-            verify_ssl=False,
-            max_retries=5,
-            retry_backoff_factor=1.0,
+            transport=transport,
+            retry=RetryConfig(max_retries=5, backoff_factor=1.0),
         ) as client:
-            assert client.timeout == 60
-            assert client.verify_ssl is False
-            assert client.default_retry_config["max_retries"] == 5
-            assert client.default_retry_config["backoff_factor"] == 1.0
+            assert client.transport is transport
+            assert client.transport.timeout == 60
+            assert client.transport.verify_ssl is False
 
     async def test_base_url_normalization(self, mock_logger):
         """Test that base_url trailing slashes are handled."""
@@ -239,23 +239,26 @@ class TestAsyncRestClientWithCircuitBreaker:
     async def test_circuit_breaker_blocks_request_when_open(self):
         """Test that circuit breaker blocks requests when open."""
         async with httpx.AsyncClient() as client:
-            breaker = AsyncCircuitBreaker(fail_max=1, reset_timeout=5)
-
-            # Open the circuit
-            async def failing_func():
-                raise Exception("Test error")
-
-            with pytest.raises(Exception):
-                await breaker.call_async(failing_func)
-
             async_client = AsyncRestClient(
                 base_url="https://api.example.com/v1",
                 service_name="test_api",
-                breaker=breaker,
                 client=client,
+                circuit_breaker=CircuitBreakerConfig(fail_max=1, reset_timeout=5),
             )
+            # Build the pipeline so the breaker is registered for this service.
+            await async_client._ensure_pipelines_built()
 
-            # Request should be blocked by circuit breaker
+            # Open the circuit on the same shared breaker the client uses
+            # (fail_max=1, so a single retryable failure opens it).
+            breaker = await AsyncCircuitBreakerRegistry.get("test_api")
+
+            async def failing_func():
+                raise ServerError("boom")
+
+            with pytest.raises(ServerError):
+                await breaker.call_async(failing_func)
+
+            # Request should now fail fast with CircuitBreakerOpenError.
             with pytest.raises(CircuitBreakerOpenError):
                 await async_client.get("/users/1", response_data_schema=User)
 
@@ -490,8 +493,8 @@ class TestAsyncRestClientPerRequestOverrides:
             async_client = AsyncRestClient(
                 base_url="https://api.example.com/v1",
                 service_name="test_api",
-                max_retries=5,
                 client=client,
+                retry=RetryConfig(max_retries=5),
             )
 
             # Override max_retries to 0 for this request

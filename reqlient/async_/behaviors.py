@@ -286,11 +286,10 @@ class AsyncIdempotencyHeaderBehavior(AsyncBehavior):
 class AsyncHttpBehavior(AsyncBehavior):
     """Behavior for making the actual HTTP request using httpx."""
 
-    def __init__(self, client_getter, timeout: int, verify_ssl: bool):
+    def __init__(self, client_getter, timeout: int):
         super().__init__(None)  # This is always the last behavior
         self.client_getter = client_getter
         self.timeout = timeout
-        self.verify_ssl = verify_ssl
 
     async def handle(self, request: RequestContext) -> ResponseContext:
         """Make the HTTP request and return a response context."""

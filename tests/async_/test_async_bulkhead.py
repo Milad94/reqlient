@@ -11,10 +11,11 @@ from reqlient import (
     AsyncBulkhead,
     AsyncBulkheadRegistry,
     AsyncRestClient,
+    BulkheadConfig,
     BulkheadFullError,
+    CircuitBreakerConfig,
 )
 from reqlient.async_.behaviors import AsyncBulkheadBehavior
-from reqlient.async_.circuit_breakers import AsyncCircuitBreaker
 from reqlient.core.errors import ServerError
 from reqlient.core.request_response import RequestContext, ResponseContext
 
@@ -167,9 +168,8 @@ class TestAsyncRestClientBulkhead:
                 base_url="https://api.example.com/v1",
                 service_name="bh_async",
                 client=client,
-                use_circuit_breaker=False,
-                use_bulkhead=True,
-                max_concurrent_requests=1,
+                circuit_breaker=None,
+                bulkhead=BulkheadConfig(max_concurrent=1),
             )
             await async_client._ensure_pipelines_built()
 
@@ -184,14 +184,12 @@ class TestAsyncRestClientBulkhead:
 
     async def test_bulkhead_full_does_not_trip_circuit_breaker(self):
         async with _mock_client() as client:
-            breaker = AsyncCircuitBreaker(fail_max=1, reset_timeout=5, service_name="bh_async_cb")
             async_client = AsyncRestClient(
                 base_url="https://api.example.com/v1",
                 service_name="bh_async_cb",
                 client=client,
-                breaker=breaker,
-                use_bulkhead=True,
-                max_concurrent_requests=1,
+                circuit_breaker=CircuitBreakerConfig(fail_max=1, reset_timeout=5),
+                bulkhead=BulkheadConfig(max_concurrent=1),
             )
             await async_client._ensure_pipelines_built()
 

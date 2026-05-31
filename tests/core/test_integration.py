@@ -8,11 +8,12 @@ import httpx
 import pytest
 from pydantic import BaseModel
 
-from reqlient.sync.circuit_breakers import CircuitBreakerRegistry
+from reqlient.core.config import CircuitBreakerConfig, RetryConfig
 from reqlient.core.errors import (
     CircuitBreakerOpenError,
     ResourceNotFoundError,
 )
+from reqlient.sync.circuit_breakers import CircuitBreakerRegistry
 from reqlient.sync.interceptors import Interceptor
 from reqlient.sync.rest_client import RestClient
 
@@ -47,15 +48,14 @@ class TestFullPipeline:
             status_code=200,
         )
 
-        breaker = CircuitBreakerRegistry.get(service_name="test", fail_max=5, reset_timeout=5)
         logger = MagicMock()
 
         client = RestClient(
             base_url="https://api.example.com/v1",
             service_name="test",
             logger=logger,
-            breaker=breaker,
-            max_retries=2,
+            retry=RetryConfig(max_retries=2),
+            circuit_breaker=CircuitBreakerConfig(),
         )
 
         response = client.get("/users/1", response_data_schema=User)
@@ -79,15 +79,13 @@ class TestFullPipeline:
             ],
         )
 
-        breaker = CircuitBreakerRegistry.get(service_name="test_retry", fail_max=10, reset_timeout=5)
 
         client = RestClient(
             base_url="https://api.example.com/v1",
             service_name="test",
             logger=MagicMock(),
-            breaker=breaker,
-            max_retries=2,
-            retry_backoff_factor=0.01,
+            retry=RetryConfig(max_retries=2, backoff_factor=0.01),
+            circuit_breaker=CircuitBreakerConfig(),
         )
 
         response = client.get("/users/1", response_data_schema=User)
@@ -99,14 +97,12 @@ class TestFullPipeline:
         """Test that circuit breaker opens after too many failures."""
         requests_mock.get("https://api.example.com/v1/users/1", status_code=500)
 
-        breaker = CircuitBreakerRegistry.get(service_name="test_cb", fail_max=2, reset_timeout=5)
-
         client = RestClient(
             base_url="https://api.example.com/v1",
-            service_name="test",
+            service_name="test_cb",
             logger=MagicMock(),
-            breaker=breaker,
-            max_retries=0,  # No retries to speed up circuit opening
+            retry=RetryConfig(max_retries=0),  # No retries to speed up circuit opening
+            circuit_breaker=CircuitBreakerConfig(fail_max=2, reset_timeout=5),
         )
 
         # Fail twice to open circuit
@@ -203,8 +199,7 @@ class TestFullPipeline:
             base_url="https://api.example.com/v1",
             service_name="test",
             logger=MagicMock(),
-            max_retries=3,
-            retry_backoff_factor=0.01,
+            retry=RetryConfig(max_retries=3, backoff_factor=0.01),
         )
 
         # Should raise ResponseValidationError without retrying
@@ -229,15 +224,13 @@ class TestFullPipeline:
             ],
         )
 
-        breaker = CircuitBreakerRegistry.get(service_name="test", fail_max=5, reset_timeout=5)
 
         client = RestClient(
             base_url="https://api.example.com/v1",
             service_name="test",
             logger=MagicMock(),
-            breaker=breaker,
-            max_retries=1,
-            retry_backoff_factor=0.01,
+            retry=RetryConfig(max_retries=1, backoff_factor=0.01),
+            circuit_breaker=CircuitBreakerConfig(),
         )
 
         response = client.get("/users/1", response_data_schema=User)
@@ -256,7 +249,7 @@ class TestFullPipeline:
             base_url="https://api.example.com/v1",
             service_name="test",
             logger=MagicMock(),
-            max_retries=3,
+            retry=RetryConfig(max_retries=3),
         )
 
         # First request
@@ -394,8 +387,7 @@ class TestRealWorldScenarios:
             base_url="https://api.example.com/v1",
             service_name="test",
             logger=MagicMock(),
-            max_retries=3,
-            retry_backoff_factor=0.01,
+            retry=RetryConfig(max_retries=3, backoff_factor=0.01),
         )
 
         # Should eventually succeed after retries
@@ -422,8 +414,7 @@ class TestRealWorldScenarios:
             base_url="https://api.example.com/v1",
             service_name="test",
             logger=MagicMock(),
-            max_retries=2,
-            retry_backoff_factor=0.1,
+            retry=RetryConfig(max_retries=2, backoff_factor=0.1),
         )
 
         # Should retry on 429 and eventually succeed

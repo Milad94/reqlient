@@ -1,11 +1,17 @@
 import logging
 from datetime import datetime
-from typing import Generic, List, Optional, Set, Type, get_origin
+from typing import Generic, List, Optional, Type, get_origin
 from urllib.parse import urljoin
 
 import httpx
 from pydantic import TypeAdapter
 
+from ..core.config import BulkheadConfig, CircuitBreakerConfig, RetryConfig, TransportConfig
+from ..core.errors import (
+    ErrorContext,
+    RestClientError,
+)
+from ..core.request_response import RequestContext, RequestT, ResponseContext, ResponseT
 from .behaviors import (
     AsyncBehavior,
     AsyncBulkheadBehavior,
@@ -22,11 +28,6 @@ from .behaviors import (
 from .bulkhead import AsyncBulkhead, AsyncBulkheadRegistry
 from .circuit_breakers import AsyncCircuitBreaker, AsyncCircuitBreakerRegistry
 from .interceptors import AsyncInterceptor
-from ..core.errors import (
-    ErrorContext,
-    RestClientError,
-)
-from ..core.request_response import RequestContext, RequestT, ResponseContext, ResponseT
 
 
 class AsyncRestClient(Generic[RequestT, ResponseT]):
@@ -46,78 +47,50 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
         self,
         base_url: str,
         service_name: str,
+        *,
+        transport: TransportConfig = TransportConfig(),
+        retry: Optional[RetryConfig] = RetryConfig(),
+        circuit_breaker: Optional[CircuitBreakerConfig] = CircuitBreakerConfig(),
+        bulkhead: Optional[BulkheadConfig] = None,
         logger: Optional[logging.Logger] = None,
-        default_headers: Optional[dict[str, str]] = None,
-        timeout: int = 30,
-        verify_ssl: bool = True,
-        max_retries: int = 3,
-        retry_backoff_factor: float = 0.5,
-        retry_status_codes: Optional[Set[int]] = None,
-        breaker: Optional[AsyncCircuitBreaker] = None,
         interceptors: Optional[List[AsyncInterceptor]] = None,
         client: Optional[httpx.AsyncClient] = None,
-        use_circuit_breaker: bool = True,
-        use_bulkhead: bool = False,
-        max_concurrent_requests: int = 10,
-        bulkhead_max_wait: float = 0.0,
-        bulkhead: Optional[AsyncBulkhead] = None,
     ):
         """
-        Initialize the AsyncRestClient with base configuration.
+        Initialize the AsyncRestClient.
 
         Args:
-            base_url: Base URL for all requests
-            service_name: The name of the service, used for logging and circuit breaker registry.
-            logger: Logger instance to use for request/response logging
-            default_headers: Default headers to include in all requests
-            timeout: Request timeout in seconds
-            verify_ssl: Whether to verify SSL certificates
-            max_retries: Maximum number of retry attempts for transient errors
-            retry_backoff_factor: Multiplier for exponential backoff between retry attempts
-            retry_status_codes: Set of HTTP status codes that should trigger a retry
-            breaker: An optional async circuit breaker instance. If not provided and use_circuit_breaker
-                    is True, one will be obtained from AsyncCircuitBreakerRegistry using service_name.
-            interceptors: An optional list of async interceptors to hook into the request/response cycle.
-            client: Optional httpx.AsyncClient instance. If not provided, one will be created.
-            use_circuit_breaker: Whether to use a circuit breaker. If True and no breaker is provided,
-                                one will be obtained from AsyncCircuitBreakerRegistry. Default is True.
+            base_url: Base URL for all requests.
+            service_name: Name of the service; used for logging and for resolving
+                the shared circuit breaker / bulkhead from their registries.
+            transport: HTTP transport settings — timeout, TLS verification, and
+                default headers. See TransportConfig.
+            retry: Retry policy, or None to disable retries. Enabled by default.
+                See RetryConfig.
+            circuit_breaker: Circuit breaker policy, or None to disable it.
+                Enabled by default. See CircuitBreakerConfig.
+            bulkhead: Bulkhead (concurrency limit) policy, or None to disable it.
+                Disabled by default. See BulkheadConfig.
+            logger: Logger instance to use for request/response logging.
+            interceptors: Optional async interceptors hooking into the request lifecycle.
+            client: Optional httpx.AsyncClient instance. If not provided, one is created.
         """
         self.base_url = base_url.rstrip("/")
         self.service_name = service_name
+        self.transport = transport
         self.logger = logger or logging.getLogger(__name__)
-        self.default_headers = default_headers or {"Content-Type": "application/json"}
-        self.timeout = timeout
-        self.verify_ssl = verify_ssl
-        self._use_circuit_breaker = use_circuit_breaker
-        self._explicit_breaker = breaker
-        self._use_bulkhead = use_bulkhead
-        self._explicit_bulkhead = bulkhead
-        self._max_concurrent_requests = max_concurrent_requests
-        self._bulkhead_max_wait = bulkhead_max_wait
+        self.default_headers = transport.default_headers or {"Content-Type": "application/json"}
 
-        # Store default behaviors to be configured per-request
-        self.default_retry_config = {
-            "max_retries": max_retries,
-            "backoff_factor": retry_backoff_factor,
-            "retry_status_codes": retry_status_codes or {408, 429, 500, 502, 503, 504},
-        }
+        self._retry = retry
+        self._circuit_breaker_config = circuit_breaker
+        self._bulkhead_config = bulkhead
+        self._interceptors = interceptors
 
         # Create or use provided httpx client
         self._client = client
         self._client_owned = client is None
 
-        # Store pipeline params for lazy initialization
-        self._pipeline_params = {
-            "logger": self.logger,
-            "timeout": self.timeout,
-            "verify_ssl": self.verify_ssl,
-            "max_retries": max_retries,
-            "retry_backoff_factor": retry_backoff_factor,
-            "retry_status_codes": retry_status_codes or {408, 429, 500, 502, 503, 504},
-            "interceptors": interceptors,
-        }
-
-        # Pipelines will be built lazily or in __aenter__
+        # Pipelines are built lazily (registry access is async) in __aenter__/request.
         self._read_pipeline: Optional[AsyncBehavior] = None
         self._write_pipeline: Optional[AsyncBehavior] = None
 
@@ -125,38 +98,43 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
     def client(self) -> httpx.AsyncClient:
         """Get or create the httpx async client."""
         if self._client is None:
-            self._client = httpx.AsyncClient(verify=self.verify_ssl, timeout=self.timeout)
+            self._client = httpx.AsyncClient(
+                verify=self.transport.verify_ssl, timeout=self.transport.timeout
+            )
             self._client_owned = True
         return self._client
 
     async def _resolve_breaker(self) -> Optional[AsyncCircuitBreaker]:
-        """Resolve circuit breaker: use provided, get from registry, or None."""
-        if self._explicit_breaker is not None:
-            return self._explicit_breaker
-        elif self._use_circuit_breaker:
-            return await AsyncCircuitBreakerRegistry.get(self.service_name)
-        return None
+        """Resolve the shared circuit breaker from the registry, or None if disabled."""
+        if self._circuit_breaker_config is None:
+            return None
+        return await AsyncCircuitBreakerRegistry.get(
+            self.service_name,
+            fail_max=self._circuit_breaker_config.fail_max,
+            reset_timeout=self._circuit_breaker_config.reset_timeout,
+        )
 
     def _resolve_bulkhead(self) -> Optional[AsyncBulkhead]:
-        """Resolve bulkhead: use provided, get from registry, or None."""
-        if self._explicit_bulkhead is not None:
-            return self._explicit_bulkhead
-        elif self._use_bulkhead:
-            return AsyncBulkheadRegistry.get(
-                self.service_name,
-                max_concurrent=self._max_concurrent_requests,
-                max_wait=self._bulkhead_max_wait,
-            )
-        return None
+        """Resolve the shared bulkhead from the registry, or None if disabled."""
+        if self._bulkhead_config is None:
+            return None
+        return AsyncBulkheadRegistry.get(
+            self.service_name,
+            max_concurrent=self._bulkhead_config.max_concurrent,
+            max_wait=self._bulkhead_config.max_wait,
+        )
 
     async def _ensure_pipelines_built(self):
         """Ensure pipelines are built (requires async for registry access)."""
         if self._read_pipeline is None or self._write_pipeline is None:
             breaker = await self._resolve_breaker()
             bulkhead = self._resolve_bulkhead()
-            params = {**self._pipeline_params, "breaker": breaker, "bulkhead": bulkhead}
-            self._read_pipeline = self._build_read_pipeline(**params)
-            self._write_pipeline = self._build_write_pipeline(**params)
+            self._read_pipeline = self._build_read_pipeline(
+                breaker=breaker, bulkhead=bulkhead, retry=self._retry, interceptors=self._interceptors
+            )
+            self._write_pipeline = self._build_write_pipeline(
+                breaker=breaker, bulkhead=bulkhead, retry=self._retry, interceptors=self._interceptors
+            )
 
     @property
     def read_pipeline(self) -> AsyncBehavior:
@@ -189,14 +167,9 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
 
     def _build_read_pipeline(
         self,
-        logger: logging.Logger,
-        timeout: int,
-        verify_ssl: bool,
         breaker: Optional[AsyncCircuitBreaker],
         bulkhead: Optional[AsyncBulkhead],
-        max_retries: int,
-        retry_backoff_factor: float,
-        retry_status_codes: Set[int],
+        retry: Optional[RetryConfig],
         interceptors: Optional[List[AsyncInterceptor]],
     ) -> AsyncBehavior:
         """
@@ -206,30 +179,31 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
         1. AsyncHttpBehavior - makes HTTP call
         2. AsyncLoggingBehavior - logs request/response
         3. AsyncStatusCodeValidationBehavior - validates status codes
-        4. AsyncRetryBehavior - retries on network/server errors
+        4. AsyncRetryBehavior - retries on network/server errors (when retry enabled)
         5. AsyncResponseValidationBehavior - validates response schema (outside retry)
-        6. AsyncCircuitBreakerBehavior - circuit breaker
-        7. AsyncBulkheadBehavior - concurrency limiter (outside the breaker)
+        6. AsyncCircuitBreakerBehavior - circuit breaker (when enabled)
+        7. AsyncBulkheadBehavior - concurrency limiter, outside the breaker (when enabled)
         8. AsyncRequestDataSchemaValidationBehavior - validates request data schema
         9. AsyncInterceptorBehavior - outermost layer
         """
         # 1. AsyncHttpBehavior - innermost, makes the actual HTTP call
         # Pass a lambda to get the client dynamically
-        pipeline: AsyncBehavior = AsyncHttpBehavior(lambda: self.client, timeout, verify_ssl)
+        pipeline: AsyncBehavior = AsyncHttpBehavior(lambda: self.client, self.transport.timeout)
 
         # 2. AsyncLoggingBehavior - wraps HTTP to log before and after
-        pipeline = AsyncLoggingBehavior(logger=logger, next_behavior=pipeline)
+        pipeline = AsyncLoggingBehavior(logger=self.logger, next_behavior=pipeline)
 
         # 3. AsyncStatusCodeValidationBehavior - validates status codes after HTTP
         pipeline = AsyncStatusCodeValidationBehavior(next_behavior=pipeline)
 
         # 4. AsyncRetryBehavior - wraps HTTP + logging + status validation (retries these)
-        pipeline = AsyncRetryBehavior(
-            max_retries=max_retries,
-            backoff_factor=retry_backoff_factor,
-            retry_status_codes=retry_status_codes,
-            next_behavior=pipeline,
-        )
+        if retry is not None:
+            pipeline = AsyncRetryBehavior(
+                max_retries=retry.max_retries,
+                backoff_factor=retry.backoff_factor,
+                retry_status_codes=retry.status_codes,
+                next_behavior=pipeline,
+            )
 
         # 5. AsyncResponseDataSchemaValidationBehavior - validates response data schema (outside retry, not retried)
         pipeline = AsyncResponseDataSchemaValidationBehavior(response_data_schema=None, next_behavior=pipeline)
@@ -244,7 +218,7 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
             pipeline = AsyncBulkheadBehavior(bulkhead=bulkhead, next_behavior=pipeline)
 
         # 8. AsyncRequestDataSchemaValidationBehavior - validates request schema at the start
-        pipeline = AsyncRequestDataSchemaValidationBehavior(request_schema=None, next_behavior=pipeline)
+        pipeline = AsyncRequestDataSchemaValidationBehavior(request_data_schema=None, next_behavior=pipeline)
 
         # 9. AsyncInterceptorBehavior - outermost layer for custom hooks
         if interceptors:
@@ -254,14 +228,9 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
 
     def _build_write_pipeline(
         self,
-        logger: logging.Logger,
-        timeout: int,
-        verify_ssl: bool,
         breaker: Optional[AsyncCircuitBreaker],
         bulkhead: Optional[AsyncBulkhead],
-        max_retries: int,
-        retry_backoff_factor: float,
-        retry_status_codes: Set[int],
+        retry: Optional[RetryConfig],
         interceptors: Optional[List[AsyncInterceptor]],
     ) -> AsyncBehavior:
         """
@@ -271,31 +240,32 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
         1. AsyncHttpBehavior - makes HTTP call
         2. AsyncLoggingBehavior - logs request/response
         3. AsyncStatusCodeValidationBehavior - validates status codes
-        4. AsyncRetryBehavior - retries on network/server errors
+        4. AsyncRetryBehavior - retries on network/server errors (when retry enabled)
         5. AsyncResponseDataSchemaValidationBehavior - validates response data schema (outside retry)
-        6. AsyncCircuitBreakerBehavior - circuit breaker
-        7. AsyncBulkheadBehavior - concurrency limiter (outside the breaker)
+        6. AsyncCircuitBreakerBehavior - circuit breaker (when enabled)
+        7. AsyncBulkheadBehavior - concurrency limiter, outside the breaker (when enabled)
         8. AsyncIdempotencyHeaderBehavior - adds idempotency headers for POST/PUT/DELETE
         9. AsyncRequestDataSchemaValidationBehavior - validates request schema
         10. AsyncInterceptorBehavior - outermost layer
         """
         # 1. AsyncHttpBehavior - innermost, makes the actual HTTP call
         # Pass a lambda to get the client dynamically
-        pipeline: AsyncBehavior = AsyncHttpBehavior(lambda: self.client, timeout, verify_ssl)
+        pipeline: AsyncBehavior = AsyncHttpBehavior(lambda: self.client, self.transport.timeout)
 
         # 2. AsyncLoggingBehavior - wraps HTTP to log before and after
-        pipeline = AsyncLoggingBehavior(logger=logger, next_behavior=pipeline)
+        pipeline = AsyncLoggingBehavior(logger=self.logger, next_behavior=pipeline)
 
         # 3. AsyncStatusCodeValidationBehavior - validates status codes after HTTP
         pipeline = AsyncStatusCodeValidationBehavior(next_behavior=pipeline)
 
         # 4. AsyncRetryBehavior - wraps HTTP + logging + status validation (retries these)
-        pipeline = AsyncRetryBehavior(
-            max_retries=max_retries,
-            backoff_factor=retry_backoff_factor,
-            retry_status_codes=retry_status_codes,
-            next_behavior=pipeline,
-        )
+        if retry is not None:
+            pipeline = AsyncRetryBehavior(
+                max_retries=retry.max_retries,
+                backoff_factor=retry.backoff_factor,
+                retry_status_codes=retry.status_codes,
+                next_behavior=pipeline,
+            )
 
         # 5. AsyncResponseDataSchemaValidationBehavior - validates response data schema (outside retry, not retried)
         pipeline = AsyncResponseDataSchemaValidationBehavior(response_data_schema=None, next_behavior=pipeline)

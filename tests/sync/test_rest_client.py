@@ -7,8 +7,9 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
+from reqlient.core.config import RetryConfig, TransportConfig
 from reqlient.core.errors import (
     AuthenticationError,
     AuthorizationError,
@@ -47,24 +48,22 @@ class TestRestClientInitialization:
         assert client.base_url == base_url
         assert client.service_name == "test"
         assert client.logger == mock_logger
-        assert client.timeout == 30
-        assert client.verify_ssl is True
+        assert client.transport.timeout == 30
+        assert client.transport.verify_ssl is True
 
     def test_custom_configuration(self, base_url, mock_logger):
         """Test RestClient with custom configuration."""
+        transport = TransportConfig(timeout=60, verify_ssl=False)
         client = RestClient(
             base_url=base_url,
             service_name="test",
             logger=mock_logger,
-            timeout=60,
-            verify_ssl=False,
-            max_retries=5,
-            retry_backoff_factor=1.0,
+            transport=transport,
+            retry=RetryConfig(max_retries=5, backoff_factor=1.0),
         )
-        assert client.timeout == 60
-        assert client.verify_ssl is False
-        assert client.default_retry_config["max_retries"] == 5
-        assert client.default_retry_config["backoff_factor"] == 1.0
+        assert client.transport is transport
+        assert client.transport.timeout == 60
+        assert client.transport.verify_ssl is False
 
     def test_base_url_normalization(self, mock_logger):
         """Test that base_url trailing slashes are handled."""
@@ -90,7 +89,7 @@ class TestRestClientInitialization:
             base_url=base_url,
             service_name="test",
             logger=mock_logger,
-            default_headers=custom_headers,
+            transport=TransportConfig(default_headers=custom_headers),
         )
         assert client.default_headers == custom_headers
 
@@ -172,7 +171,7 @@ class TestRestClientGet:
 
         with pytest.raises(StatusCodeError) as exc_info:
             basic_client.get("/users/1", response_data_schema=User)
-        
+
         assert exc_info.value.context is not None
         assert exc_info.value.context.response_status == 418
 
@@ -533,8 +532,8 @@ class TestRestClientTransport:
                 base_url=base_url,
                 service_name="test_verify_off",
                 logger=mock_logger,
-                verify_ssl=False,
-                use_circuit_breaker=False,
+                transport=TransportConfig(verify_ssl=False),
+                circuit_breaker=None,
             )
 
         mock_client_cls.assert_called_once()
@@ -550,7 +549,7 @@ class TestRestClientTransport:
                 base_url=base_url,
                 service_name="test_verify_on",
                 logger=mock_logger,
-                use_circuit_breaker=False,
+                circuit_breaker=None,
             )
 
         assert mock_client_cls.call_args.kwargs["verify"] is True
@@ -563,15 +562,15 @@ class TestRestClientTransport:
             base_url=base_url,
             service_name="secure",
             logger=mock_logger,
-            verify_ssl=True,
-            use_circuit_breaker=False,
+            transport=TransportConfig(verify_ssl=True),
+            circuit_breaker=None,
         )
         insecure = RestClient(
             base_url=base_url,
             service_name="insecure",
             logger=mock_logger,
-            verify_ssl=False,
-            use_circuit_breaker=False,
+            transport=TransportConfig(verify_ssl=False),
+            circuit_breaker=None,
         )
 
         secure_ctx = secure.session._transport._pool._ssl_context
@@ -593,15 +592,15 @@ class TestRestClientTransport:
             base_url=base_url,
             service_name="client_a",
             logger=mock_logger,
-            verify_ssl=True,
-            use_circuit_breaker=False,
+            transport=TransportConfig(verify_ssl=True),
+            circuit_breaker=None,
         )
         client_b = RestClient(
             base_url=base_url,
             service_name="client_b",
             logger=mock_logger,
-            verify_ssl=False,
-            use_circuit_breaker=False,
+            transport=TransportConfig(verify_ssl=False),
+            circuit_breaker=None,
         )
 
         assert client_a.session is not client_b.session

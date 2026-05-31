@@ -7,10 +7,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pybreaker import CircuitBreaker
 
-from reqlient.sync.behaviors import CircuitBreakerBehavior
-from reqlient.sync.circuit_breakers import CircuitBreakerRegistry
 from reqlient.core.errors import CircuitBreakerOpenError, ConnectionError
 from reqlient.core.request_response import RequestContext, ResponseContext
+from reqlient.sync.behaviors import CircuitBreakerBehavior
+from reqlient.sync.circuit_breakers import CircuitBreakerRegistry
 
 
 class TestCircuitBreakerBehavior:
@@ -214,8 +214,9 @@ class TestRedisBackedCircuitBreaker:
         """Regression: a wrong CircuitRedisStorage constructor call used to make
         every sync breaker silently fall back to in-memory even when Redis was
         configured. A configured breaker must now use CircuitRedisStorage."""
-        import reqlient.sync.circuit_breakers as cb_mod
         from pybreaker import CircuitRedisStorage
+
+        import reqlient.sync.circuit_breakers as cb_mod
 
         fake_redis = MagicMock()
         fake_redis.ping.return_value = True

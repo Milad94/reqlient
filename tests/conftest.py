@@ -11,12 +11,12 @@ import pytest
 import respx
 from pydantic import BaseModel
 
-from reqlient.sync.circuit_breakers import CircuitBreakerRegistry
-from reqlient.sync.bulkhead import BulkheadRegistry
-from reqlient.async_.circuit_breakers import AsyncCircuitBreakerRegistry
 from reqlient.async_.bulkhead import AsyncBulkheadRegistry
+from reqlient.async_.circuit_breakers import AsyncCircuitBreakerRegistry
+from reqlient.core.config import CircuitBreakerConfig, RetryConfig
+from reqlient.sync.bulkhead import BulkheadRegistry
+from reqlient.sync.circuit_breakers import CircuitBreakerRegistry
 from reqlient.sync.rest_client import RestClient
-
 
 # ---------------------------------------------------------------------------
 # requests_mock -> respx compatibility shim
@@ -182,20 +182,24 @@ def basic_client(base_url, mock_logger):
         base_url=base_url,
         service_name="test_service",
         logger=mock_logger,
-        max_retries=2,
-        use_circuit_breaker=False,  # Disable auto circuit breaker for basic tests
+        retry=RetryConfig(max_retries=2),
+        circuit_breaker=None,  # Disable circuit breaker for basic tests
     )
 
 
 @pytest.fixture
 def full_featured_client(base_url, mock_logger, circuit_breaker):
-    """RestClient instance with all features enabled."""
+    """RestClient instance with all features enabled.
+
+    The ``circuit_breaker`` fixture pre-registers a breaker for "test_service";
+    the client resolves that same shared instance from the registry.
+    """
     return RestClient(
         base_url=base_url,
         service_name="test_service",
         logger=mock_logger,
-        breaker=circuit_breaker,
-        max_retries=3,
+        retry=RetryConfig(max_retries=3),
+        circuit_breaker=CircuitBreakerConfig(fail_max=3, reset_timeout=5),
     )
 
 

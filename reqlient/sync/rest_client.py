@@ -1,15 +1,19 @@
 import logging
 import threading
 from datetime import datetime
-from typing import Generic, List, Optional, Set, Type, Union, get_origin
+from typing import Generic, List, Optional, Type, get_origin
 from urllib.parse import urljoin
 
 import httpx
-from pydantic import TypeAdapter
 from pybreaker import CircuitBreaker
+from pydantic import TypeAdapter
 
-from .bulkhead import Bulkhead, BulkheadRegistry
-from .circuit_breakers import CircuitBreakerRegistry
+from ..core.config import BulkheadConfig, CircuitBreakerConfig, RetryConfig, TransportConfig
+from ..core.errors import (
+    ErrorContext,
+    RestClientError,
+)
+from ..core.request_response import RequestContext, RequestT, ResponseContext, ResponseT
 from .behaviors import (
     Behavior,
     BulkheadBehavior,
@@ -23,12 +27,9 @@ from .behaviors import (
     RetryBehavior,
     StatusCodeValidationBehavior,
 )
-from ..core.errors import (
-    ErrorContext,
-    RestClientError,
-)
+from .bulkhead import Bulkhead, BulkheadRegistry
+from .circuit_breakers import CircuitBreakerRegistry
 from .interceptors import Interceptor
-from ..core.request_response import RequestContext, RequestT, ResponseContext, ResponseT
 
 
 class RestClient(Generic[RequestT, ResponseT]):
@@ -47,55 +48,37 @@ class RestClient(Generic[RequestT, ResponseT]):
         self,
         base_url: str,
         service_name: str,
+        *,
+        transport: TransportConfig = TransportConfig(),
+        retry: Optional[RetryConfig] = RetryConfig(),
+        circuit_breaker: Optional[CircuitBreakerConfig] = CircuitBreakerConfig(),
+        bulkhead: Optional[BulkheadConfig] = None,
         logger: Optional[logging.Logger] = None,
-        default_headers: Optional[dict[str, str]] = None,
-        timeout: int = 30,
-        verify_ssl: bool = True,
-        max_retries: int = 3,
-        retry_backoff_factor: float = 0.5,
-        retry_status_codes: Optional[Set[int]] = None,
-        breaker: Optional[CircuitBreaker] = None,
         interceptors: Optional[List[Interceptor]] = None,
-        use_circuit_breaker: bool = True,
-        use_bulkhead: bool = False,
-        max_concurrent_requests: int = 10,
-        bulkhead_max_wait: float = 0.0,
-        bulkhead: Optional[Bulkhead] = None,
     ):
         """
-        Initialize the RestClient with base configuration.
+        Initialize the RestClient.
 
         Args:
-            base_url: Base URL for all requests
-            service_name: The name of the service, used for logging and circuit breaker registry.
-            logger: Logger instance to use for request/response logging
-            default_headers: Default headers to include in all requests
-            timeout: Request timeout in seconds
-            verify_ssl: Whether to verify SSL certificates
-            max_retries: Maximum number of retry attempts for transient errors
-            retry_backoff_factor: Multiplier for exponential backoff between retry attempts
-            retry_status_codes: Set of HTTP status codes that should trigger a retry
-            breaker: An optional circuit breaker instance. If not provided and use_circuit_breaker
-                    is True, one will be obtained from CircuitBreakerRegistry using service_name.
-            interceptors: An optional list of interceptors to hook into the request/response cycle.
-            use_circuit_breaker: Whether to use a circuit breaker. If True and no breaker is provided,
-                                one will be obtained from CircuitBreakerRegistry. Default is True.
-            use_bulkhead: Whether to enable the bulkhead (concurrency limiter). When True and no
-                         bulkhead is provided, one is obtained from BulkheadRegistry using
-                         service_name. Default is False.
-            max_concurrent_requests: Maximum concurrent in-flight requests allowed by the bulkhead
-                                    (used only when use_bulkhead is True and no bulkhead is provided).
-            bulkhead_max_wait: Seconds to wait for a free bulkhead slot before raising
-                              BulkheadFullError. 0 (default) means reject immediately when full.
-            bulkhead: An optional Bulkhead instance. If provided, it is used regardless of
-                     use_bulkhead/max_concurrent_requests.
+            base_url: Base URL for all requests.
+            service_name: Name of the service; used for logging and for resolving
+                the shared circuit breaker / bulkhead from their registries.
+            transport: HTTP transport settings — timeout, TLS verification, and
+                default headers. See TransportConfig.
+            retry: Retry policy, or None to disable retries. Enabled by default.
+                See RetryConfig.
+            circuit_breaker: Circuit breaker policy, or None to disable it.
+                Enabled by default. See CircuitBreakerConfig.
+            bulkhead: Bulkhead (concurrency limit) policy, or None to disable it.
+                Disabled by default. See BulkheadConfig.
+            logger: Logger instance to use for request/response logging.
+            interceptors: Optional interceptors hooking into the request lifecycle.
         """
         self.base_url = base_url.rstrip("/")
         self.service_name = service_name
+        self.transport = transport
         self.logger = logger or logging.getLogger(__name__)
-        self.default_headers = default_headers or {"Content-Type": "application/json"}
-        self.timeout = timeout
-        self.verify_ssl = verify_ssl
+        self.default_headers = transport.default_headers or {"Content-Type": "application/json"}
 
         # Per-instance thread-local httpx client. This is per-instance (not a
         # module global) so that each client gets its own httpx.Client built
@@ -105,51 +88,34 @@ class RestClient(Generic[RequestT, ResponseT]):
         # pool.
         self._thread_local = threading.local()
 
-        # Resolve circuit breaker: use provided, get from registry, or None
-        if breaker is not None:
-            resolved_breaker = breaker
-        elif use_circuit_breaker:
-            resolved_breaker = CircuitBreakerRegistry.get(service_name)
-        else:
-            resolved_breaker = None
-
-        # Resolve bulkhead: use provided, get from registry, or None
-        if bulkhead is not None:
-            resolved_bulkhead = bulkhead
-        elif use_bulkhead:
-            resolved_bulkhead = BulkheadRegistry.get(
+        # Resolve the shared circuit breaker / bulkhead from their registries
+        # (keyed by service_name), or None when the policy is disabled.
+        resolved_breaker = (
+            CircuitBreakerRegistry.get(
                 service_name,
-                max_concurrent=max_concurrent_requests,
-                max_wait=bulkhead_max_wait,
+                fail_max=circuit_breaker.fail_max,
+                reset_timeout=circuit_breaker.reset_timeout,
             )
-        else:
-            resolved_bulkhead = None
+            if circuit_breaker is not None
+            else None
+        )
+        resolved_bulkhead = (
+            BulkheadRegistry.get(
+                service_name,
+                max_concurrent=bulkhead.max_concurrent,
+                max_wait=bulkhead.max_wait,
+            )
+            if bulkhead is not None
+            else None
+        )
 
-        # Store default behaviors to be configured per-request
-        self.default_retry_config = {
-            "max_retries": max_retries,
-            "backoff_factor": retry_backoff_factor,
-            "retry_status_codes": retry_status_codes or {408, 429, 500, 502, 503, 504},
-        }
-
-        # Build separate pipelines for read and write operations
-        pipeline_params = {
-            "logger": self.logger,
-            "breaker": resolved_breaker,
-            "bulkhead": resolved_bulkhead,
-            "timeout": self.timeout,
-            "verify_ssl": self.verify_ssl,
-            "max_retries": max_retries,
-            "retry_backoff_factor": retry_backoff_factor,
-            "retry_status_codes": retry_status_codes or {408, 429, 500, 502, 503, 504},
-            "interceptors": interceptors,
-        }
-
-        # Read pipeline: optimized for GET/HEAD
-        self.read_pipeline = self.__build_read_pipeline(**pipeline_params)
-
-        # Write pipeline: optimized for POST/PUT/PATCH/DELETE with idempotency
-        self.write_pipeline = self.__build_write_pipeline(**pipeline_params)
+        # Build separate pipelines for read and write operations.
+        self.read_pipeline = self.__build_read_pipeline(
+            breaker=resolved_breaker, bulkhead=resolved_bulkhead, retry=retry, interceptors=interceptors
+        )
+        self.write_pipeline = self.__build_write_pipeline(
+            breaker=resolved_breaker, bulkhead=resolved_bulkhead, retry=retry, interceptors=interceptors
+        )
 
     @property
     def session(self) -> httpx.Client:
@@ -162,22 +128,17 @@ class RestClient(Generic[RequestT, ResponseT]):
         """
         if not hasattr(self._thread_local, "session"):
             self._thread_local.session = httpx.Client(
-                verify=self.verify_ssl,
-                timeout=self.timeout,
+                verify=self.transport.verify_ssl,
+                timeout=self.transport.timeout,
                 follow_redirects=True,
             )
         return self._thread_local.session
 
     def __build_read_pipeline(
         self,
-        logger: logging.Logger,
-        timeout: int,
-        verify_ssl: bool,
         breaker: Optional[CircuitBreaker],
         bulkhead: Optional[Bulkhead],
-        max_retries: int,
-        retry_backoff_factor: float,
-        retry_status_codes: Set[int],
+        retry: Optional[RetryConfig],
         interceptors: Optional[List[Interceptor]],
     ) -> Behavior:
         """
@@ -187,29 +148,30 @@ class RestClient(Generic[RequestT, ResponseT]):
         1. HttpBehavior - makes HTTP call
         2. LoggingBehavior - logs request/response
         3. StatusCodeValidationBehavior - validates status codes
-        4. RetryBehavior - retries on network/server errors
+        4. RetryBehavior - retries on network/server errors (when retry enabled)
         5. ResponseValidationBehavior - validates response schema (outside retry)
-        6. CircuitBreakerBehavior - circuit breaker
-        7. BulkheadBehavior - concurrency limiter (outside the breaker)
+        6. CircuitBreakerBehavior - circuit breaker (when enabled)
+        7. BulkheadBehavior - concurrency limiter, outside the breaker (when enabled)
         8. RequestValidationBehavior - validates request schema
         9. InterceptorBehavior - outermost layer
         """
         # 1. HttpBehavior - innermost, makes the actual HTTP call
-        pipeline: Behavior = HttpBehavior(self.session, timeout)
+        pipeline: Behavior = HttpBehavior(self.session, self.transport.timeout)
 
         # 2. LoggingBehavior - wraps HTTP to log before and after
-        pipeline = LoggingBehavior(logger=logger, next_behavior=pipeline)
+        pipeline = LoggingBehavior(logger=self.logger, next_behavior=pipeline)
 
         # 3. StatusCodeValidationBehavior - validates status codes after logging
         pipeline = StatusCodeValidationBehavior(next_behavior=pipeline)
 
         # 4. RetryBehavior - wraps HTTP + logging + status validation (retries these)
-        pipeline = RetryBehavior(
-            max_retries=max_retries,
-            backoff_factor=retry_backoff_factor,
-            retry_status_codes=retry_status_codes,
-            next_behavior=pipeline,
-        )
+        if retry is not None:
+            pipeline = RetryBehavior(
+                max_retries=retry.max_retries,
+                backoff_factor=retry.backoff_factor,
+                retry_status_codes=retry.status_codes,
+                next_behavior=pipeline,
+            )
 
         # 5. ResponseValidationBehavior - validates response schema (outside retry, not retried)
         pipeline = ResponseValidationBehavior(response_data_schema=None, next_behavior=pipeline)
@@ -234,14 +196,9 @@ class RestClient(Generic[RequestT, ResponseT]):
 
     def __build_write_pipeline(
         self,
-        logger: logging.Logger,
-        timeout: int,
-        verify_ssl: bool,
         breaker: Optional[CircuitBreaker],
         bulkhead: Optional[Bulkhead],
-        max_retries: int,
-        retry_backoff_factor: float,
-        retry_status_codes: Set[int],
+        retry: Optional[RetryConfig],
         interceptors: Optional[List[Interceptor]],
     ) -> Behavior:
         """
@@ -251,30 +208,31 @@ class RestClient(Generic[RequestT, ResponseT]):
         1. HttpBehavior - makes HTTP call
         2. LoggingBehavior - logs request/response
         3. StatusCodeValidationBehavior - validates status codes
-        4. RetryBehavior - retries on network/server errors
+        4. RetryBehavior - retries on network/server errors (when retry enabled)
         5. ResponseValidationBehavior - validates response schema (outside retry)
-        6. CircuitBreakerBehavior - circuit breaker
-        7. BulkheadBehavior - concurrency limiter (outside the breaker)
+        6. CircuitBreakerBehavior - circuit breaker (when enabled)
+        7. BulkheadBehavior - concurrency limiter, outside the breaker (when enabled)
         8. IdempotencyHeaderBehavior - adds idempotency headers for POST/PUT/DELETE
         9. RequestValidationBehavior - validates request schema
         10. InterceptorBehavior - outermost layer
         """
         # 1. HttpBehavior - innermost, makes the actual HTTP call
-        pipeline: Behavior = HttpBehavior(self.session, timeout)
+        pipeline: Behavior = HttpBehavior(self.session, self.transport.timeout)
 
         # 2. LoggingBehavior - wraps HTTP to log before and after
-        pipeline = LoggingBehavior(logger=logger, next_behavior=pipeline)
+        pipeline = LoggingBehavior(logger=self.logger, next_behavior=pipeline)
 
         # 3. StatusCodeValidationBehavior - validates status codes after logging
         pipeline = StatusCodeValidationBehavior(next_behavior=pipeline)
 
         # 4. RetryBehavior - wraps HTTP + logging + status validation (retries these)
-        pipeline = RetryBehavior(
-            max_retries=max_retries,
-            backoff_factor=retry_backoff_factor,
-            retry_status_codes=retry_status_codes,
-            next_behavior=pipeline,
-        )
+        if retry is not None:
+            pipeline = RetryBehavior(
+                max_retries=retry.max_retries,
+                backoff_factor=retry.backoff_factor,
+                retry_status_codes=retry.status_codes,
+                next_behavior=pipeline,
+            )
 
         # 5. ResponseValidationBehavior - validates response schema (outside retry, not retried)
         pipeline = ResponseValidationBehavior(response_data_schema=None, next_behavior=pipeline)

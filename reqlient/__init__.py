@@ -16,9 +16,12 @@ from .async_ import (
     TraceContextInterceptor,
 )
 from .core import (
+    DEFAULT_RETRY_STATUS_CODES,
     AuthenticationError,
     AuthorizationError,
+    BulkheadConfig,
     BulkheadFullError,
+    CircuitBreakerConfig,
     CircuitBreakerOpenError,
     ConnectionError,
     ErrorContext,
@@ -30,9 +33,11 @@ from .core import (
     ResponseValidationError,
     RestClientError,
     RetryableError,
+    RetryConfig,
     ServerError,
     StatusCodeError,
     TimeoutError,
+    TransportConfig,
     RequestContext,
 )
 from .sync import (
@@ -57,6 +62,12 @@ __all__ = [
     "BulkheadRegistry",
     "AsyncBulkhead",
     "AsyncBulkheadRegistry",
+    # Config
+    "TransportConfig",
+    "RetryConfig",
+    "CircuitBreakerConfig",
+    "BulkheadConfig",
+    "DEFAULT_RETRY_STATUS_CODES",
     # Errors
     "RestClientError",
     "RequestValidationError",
@@ -84,4 +95,4 @@ __all__ = [
     "ResponseContext",
 ]
 
-__version__ = "0.3.1"
+__version__ = "0.4.0"

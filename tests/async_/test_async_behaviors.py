@@ -176,7 +176,7 @@ class TestAsyncHttpBehavior:
             )
             client.request = AsyncMock(return_value=mock_response)
 
-            behavior = AsyncHttpBehavior(lambda: client, timeout=30, verify_ssl=True)
+            behavior = AsyncHttpBehavior(lambda: client, timeout=30)
             request = RequestContext(
                 method="GET",
                 url="https://api.example.com/v1/users/1",
@@ -194,7 +194,7 @@ class TestAsyncHttpBehavior:
         async with httpx.AsyncClient() as client:
             client.request = AsyncMock(side_effect=httpx.ConnectError("Connection failed"))
 
-            behavior = AsyncHttpBehavior(lambda: client, timeout=30, verify_ssl=True)
+            behavior = AsyncHttpBehavior(lambda: client, timeout=30)
             request = RequestContext(
                 method="GET",
                 url="https://api.example.com/v1/users/1",
@@ -211,7 +211,7 @@ class TestAsyncHttpBehavior:
         async with httpx.AsyncClient() as client:
             client.request = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
 
-            behavior = AsyncHttpBehavior(lambda: client, timeout=30, verify_ssl=True)
+            behavior = AsyncHttpBehavior(lambda: client, timeout=30)
             request = RequestContext(
                 method="GET",
                 url="https://api.example.com/v1/users/1",

@@ -1,5 +1,12 @@
 """Core shared modules used by both sync and async clients."""
 
+from .config import (
+    DEFAULT_RETRY_STATUS_CODES,
+    BulkheadConfig,
+    CircuitBreakerConfig,
+    RetryConfig,
+    TransportConfig,
+)
 from .errors import (
     AuthenticationError,
     AuthorizationError,
@@ -38,6 +45,12 @@ __all__ = [
     "CircuitBreakerOpenError",
     "BulkheadFullError",
     "ErrorContext",
+    # Config
+    "TransportConfig",
+    "RetryConfig",
+    "CircuitBreakerConfig",
+    "BulkheadConfig",
+    "DEFAULT_RETRY_STATUS_CODES",
     # Request/Response
     "RequestContext",
     "ResponseContext",

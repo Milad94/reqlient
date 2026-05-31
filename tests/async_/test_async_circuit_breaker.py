@@ -21,7 +21,6 @@ from reqlient.core.errors import (
 )
 
 
-
 @pytest.mark.asyncio
 class TestAsyncCircuitBreaker:
     """Test AsyncCircuitBreaker."""

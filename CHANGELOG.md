@@ -5,6 +5,45 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0]
+
+### Changed (breaking)
+
+- **Reworked the client configuration interface into grouped config objects.**
+  `RestClient` and `AsyncRestClient` no longer take a long list of flat keyword
+  arguments; resilience and transport settings are passed as small frozen
+  dataclasses, one per concern: `TransportConfig`, `RetryConfig`,
+  `CircuitBreakerConfig`, and `BulkheadConfig`. Each policy is enabled by passing
+  its config object and disabled by passing `None`. Config-group arguments are
+  keyword-only.
+
+  ```python
+  RestClient(
+      base_url, service_name,
+      transport=TransportConfig(timeout=30, verify_ssl=True),
+      retry=RetryConfig(max_retries=3),
+      circuit_breaker=CircuitBreakerConfig(fail_max=5),  # None to disable
+      bulkhead=BulkheadConfig(max_concurrent=10),        # None/omit to disable
+  )
+  ```
+
+  Removed constructor arguments (no backward compatibility): `timeout`,
+  `verify_ssl`, `default_headers` → `transport`; `max_retries`,
+  `retry_backoff_factor`, `retry_status_codes` → `retry`; `use_circuit_breaker`,
+  `breaker` → `circuit_breaker`; `use_bulkhead`, `max_concurrent_requests`,
+  `bulkhead_max_wait`, `bulkhead` (instance) → `bulkhead` (config). The async
+  client keeps its `client=` (httpx.AsyncClient) injection point. Per-request
+  `max_retries` / `retry_backoff_factor` overrides on the HTTP methods are
+  unchanged.
+
+  Retry and circuit breaker are enabled by default; the bulkhead is off by
+  default. Passing `retry=None` now fully disables the retry behavior.
+
+### Removed
+
+- Dead `default_retry_config` attribute and the unused `verify_ssl` parameter
+  threaded through the pipeline builders / `AsyncHttpBehavior`.
+
 ## [0.3.1]
 
 ### Fixed

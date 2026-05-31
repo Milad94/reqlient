@@ -233,13 +233,33 @@ Create client instances - circuit breakers are automatically managed by the regi
 
 ```python
 # in your_app/clients.py
-from reqlient import RestClient
+from reqlient import RestClient, RetryConfig
 
-# Circuit breaker is automatically created/shared via the registry
+# Circuit breaker is enabled by default and shared via the registry
 user_service_client = RestClient(
     base_url="https://api.example.com/v1",
     service_name="user_api",  # Registry manages breaker for this service
-    max_retries=3
+    retry=RetryConfig(max_retries=3),
+)
+```
+
+Configuration is grouped into small objects — `TransportConfig` (timeout, TLS,
+default headers), `RetryConfig`, `CircuitBreakerConfig`, and `BulkheadConfig`.
+Each policy is enabled by passing its config object and disabled by passing
+`None` (retry and circuit breaker are on by default; the bulkhead is off):
+
+```python
+from reqlient import (
+    RestClient, TransportConfig, RetryConfig, CircuitBreakerConfig, BulkheadConfig,
+)
+
+client = RestClient(
+    base_url="https://api.example.com/v1",
+    service_name="user_api",
+    transport=TransportConfig(timeout=30, verify_ssl=True),
+    retry=RetryConfig(max_retries=3, backoff_factor=0.5),
+    circuit_breaker=CircuitBreakerConfig(fail_max=5, reset_timeout=60),
+    bulkhead=BulkheadConfig(max_concurrent=10),  # omit/None to disable
 )
 ```
 
@@ -464,12 +484,11 @@ another_payments_client = RestClient(
     service_name="payments_api",  # Same breaker as above
 )
 
-# Override defaults for specific services
-breaker = CircuitBreakerRegistry.get("critical_api", fail_max=3, reset_timeout=120)
+# Override breaker settings for specific services via CircuitBreakerConfig
 critical_client = RestClient(
     base_url="https://api.critical.com",
     service_name="critical_api",
-    breaker=breaker,  # Explicit breaker with custom settings
+    circuit_breaker=CircuitBreakerConfig(fail_max=3, reset_timeout=120),
 )
 ```
 
