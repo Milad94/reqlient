@@ -3,7 +3,7 @@ import threading
 from typing import Optional, Set
 
 import redis
-from pybreaker import CircuitBreaker, CircuitRedisStorage
+from pybreaker import STATE_CLOSED, CircuitBreaker, CircuitRedisStorage
 
 logger = logging.getLogger(__name__)
 
@@ -126,9 +126,15 @@ class CircuitBreakerRegistry:
         """Create a new circuit breaker instance."""
         if cls._redis_client is not None:
             try:
+                # pybreaker's CircuitRedisStorage signature is
+                # (state, redis_object, namespace=..., fallback_circuit_state=...).
+                # fallback_circuit_state=STATE_CLOSED makes the breaker fail open
+                # (treat the circuit as closed) if Redis is unreachable at runtime.
                 state_storage = CircuitRedisStorage(
-                    redis_client=cls._redis_client,
-                    namespace=f"breaker:{service_name}"
+                    STATE_CLOSED,
+                    cls._redis_client,
+                    namespace=f"breaker:{service_name}",
+                    fallback_circuit_state=STATE_CLOSED,
                 )
                 logger.info(f"Created Redis-backed circuit breaker for {service_name}")
                 return CircuitBreaker(

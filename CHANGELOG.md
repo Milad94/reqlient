@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1]
+
+### Fixed
+
+- **Redis-backed synchronous circuit breaker now actually uses Redis.** The
+  `CircuitRedisStorage` was constructed with an invalid argument
+  (`redis_client=` instead of `redis_object=`, and a missing required initial
+  `state`), which raised `TypeError` and was silently swallowed — so every sync
+  breaker fell back to in-memory storage even when Redis was configured. The
+  constructor is now called correctly, with `fallback_circuit_state=STATE_CLOSED`
+  so the breaker fails open (treats the circuit as closed) if Redis becomes
+  unreachable at runtime.
+
 ## [0.3.0]
 
 ### Added

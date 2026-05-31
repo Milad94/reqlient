@@ -199,3 +199,33 @@ class TestCircuitBreakerRegistry:
         breaker = CircuitBreakerRegistry.get("test_service", fail_max=3, reset_timeout=5)
         assert breaker is not None
         assert isinstance(breaker, CircuitBreaker)
+
+
+class TestRedisBackedCircuitBreaker:
+    """Verify that a configured Redis-backed sync breaker actually uses Redis."""
+
+    def setup_method(self):
+        CircuitBreakerRegistry.reset()
+
+    def teardown_method(self):
+        CircuitBreakerRegistry.reset()
+
+    def test_redis_configured_breaker_uses_redis_storage(self):
+        """Regression: a wrong CircuitRedisStorage constructor call used to make
+        every sync breaker silently fall back to in-memory even when Redis was
+        configured. A configured breaker must now use CircuitRedisStorage."""
+        import reqlient.sync.circuit_breakers as cb_mod
+        from pybreaker import CircuitRedisStorage
+
+        fake_redis = MagicMock()
+        fake_redis.ping.return_value = True
+        fake_redis.get.return_value = None  # no existing state stored
+
+        with patch.object(cb_mod.redis, "from_url", return_value=fake_redis):
+            CircuitBreakerRegistry.configure(redis_url="redis://localhost:6379/0")
+            breaker = CircuitBreakerRegistry.get("redis_service", fail_max=3, reset_timeout=5)
+
+        assert isinstance(breaker, CircuitBreaker)
+        # The breaker's storage must be Redis-backed and wired to our client.
+        assert isinstance(breaker._state_storage, CircuitRedisStorage)
+        assert breaker._state_storage._redis is fake_redis
