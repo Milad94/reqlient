@@ -2,7 +2,7 @@
 Comprehensive tests for async circuit breaker functionality.
 """
 
-import asyncio
+import time
 
 import pytest
 
@@ -107,7 +107,7 @@ class TestAsyncCircuitBreaker:
 
     async def test_half_open_to_closed_on_success(self):
         """Test that circuit transitions from half-open to closed on success."""
-        breaker = AsyncCircuitBreaker(fail_max=1, reset_timeout=0.1)
+        breaker = AsyncCircuitBreaker(fail_max=1, reset_timeout=5)
 
         async def failing_func():
             raise ServerError("Server error")
@@ -119,10 +119,11 @@ class TestAsyncCircuitBreaker:
         with pytest.raises(ServerError):
             await breaker.call_async(failing_func)
 
-        # Wait for timeout
-        await asyncio.sleep(0.2)
+        # Deterministically age the last failure past reset_timeout so the next
+        # call transitions to HALF_OPEN — no wall-clock sleep (avoids flakiness).
+        await breaker._set_last_failure_time(time.time() - 3600)
 
-        # Success should close the circuit
+        # Success should close the circuit (HALF_OPEN -> CLOSED)
         result = await breaker.call_async(success_func)
         assert result == "success"
 
@@ -132,7 +133,7 @@ class TestAsyncCircuitBreaker:
 
     async def test_half_open_to_open_on_failure(self):
         """Test that circuit transitions from half-open back to open on failure."""
-        breaker = AsyncCircuitBreaker(fail_max=1, reset_timeout=0.1)
+        breaker = AsyncCircuitBreaker(fail_max=1, reset_timeout=5)
 
         async def failing_func():
             raise ServerError("Server error")
@@ -141,8 +142,8 @@ class TestAsyncCircuitBreaker:
         with pytest.raises(ServerError):
             await breaker.call_async(failing_func)
 
-        # Wait for timeout
-        await asyncio.sleep(0.2)
+        # Deterministically age the last failure past reset_timeout (no sleep).
+        await breaker._set_last_failure_time(time.time() - 3600)
 
         # Failure in half-open should open circuit again
         with pytest.raises(ServerError):
@@ -182,8 +183,6 @@ class TestAsyncInMemoryStorage:
 
     async def test_last_failure_time(self):
         """Test setting and getting last failure time."""
-        import time
-
         storage = AsyncInMemoryStorage(namespace="test")
         timestamp = time.time()
         await storage.set_last_failure_time("service1", timestamp)
