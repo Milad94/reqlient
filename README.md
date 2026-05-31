@@ -8,15 +8,16 @@ This module provides a `RestClient` that abstracts away the complexities of API 
 
 - [Core Features](#core-features)
 - [Installation & Dependencies](#installation--dependencies)
-- [Development Setup](#development-setup)
 - [Quick Start: Fetching a User](#quick-start-fetching-a-user)
 - [Async Quick Start](#async-quick-start)
 - [How It Works: Dual Pipeline Architecture](#how-it-works-dual-pipeline-architecture)
 - [Advanced Usage](#advanced-usage)
 - [Async Usage](#async-usage)
+- [Detailed Error Handling](#detailed-error-handling)
+- [Development Setup](#development-setup)
 - [Testing](#testing)
 - [Building](#building)
-- [Detailed Error Handling](#detailed-error-handling)
+- [License](#license)
 
 ---
 
@@ -68,129 +69,6 @@ Or using `uv`:
 ```bash
 uv add reqlient   # sync + async clients both included
 ```
-
----
-
-## Development Setup
-
-This project uses modern Python tooling for development:
-
-- **uv** - Fast Python package manager
-- **ruff** - Fast Python linter and formatter
-- **just** - Command runner (like Make)
-- **pytest** - Testing framework
-
-### Prerequisites
-
-1. Install **uv**: https://github.com/astral-sh/uv
-   ```bash
-   curl -LsSf https://astral.sh/uv/install.sh | sh
-   ```
-
-2. Install **just**: https://github.com/casey/just
-   ```bash
-   # macOS
-   brew install just
-   
-   # Linux
-   cargo install just
-   ```
-
-### Quick Start
-
-```bash
-# Install dependencies
-just install-dev
-
-# Run tests
-just test
-
-# Format code
-just format
-
-# Lint code
-just lint
-
-# Run all checks
-just check
-```
-
-### Available Commands
-
-Run `just` or `just help` to see all available commands:
-
-#### Development
-- `just install` - Install dependencies
-- `just install-dev` - Install with dev dependencies
-- `just test` - Run tests
-- `just test-cov` - Run tests with coverage
-- `just format` - Format code with ruff
-- `just lint` - Lint code with ruff
-- `just fix` - Format and fix linting issues
-- `just check` - Check formatting and linting
-
-#### Building
-- `just build` - Build package
-- `just clean` - Clean build artifacts
-
-#### Other
-- `just info` - Show project info
-- `just deps` - Show dependency tree
-- `just update` - Update dependencies
-
-### Workflow
-
-1. **Before committing:**
-   ```bash
-   just fix    # Format and fix linting
-   just test   # Run tests
-   ```
-
-2. **CI checks:**
-   ```bash
-   just ci     # Run all checks (format, lint, test)
-   ```
-
-### Project Structure
-
-```
-reqlient/
-├── pyproject.toml          # Project configuration (PEP 621)
-├── uv.lock                 # Locked dependencies (uv)
-├── Justfile                # Task runner commands
-├── CHANGELOG.md            # Release notes
-├── reqlient/               # Source code
-│   ├── __init__.py         # Main exports
-│   ├── core/               # Shared modules
-│   │   ├── config.py       # Config objects (Transport/Retry/CircuitBreaker/Bulkhead)
-│   │   ├── errors.py       # Error types
-│   │   └── request_response.py
-│   ├── sync/               # Synchronous client
-│   │   ├── rest_client.py
-│   │   ├── behaviors.py
-│   │   ├── circuit_breakers.py
-│   │   ├── bulkhead.py
-│   │   └── interceptors.py
-│   └── async_/             # Asynchronous client
-│       ├── rest_client.py
-│       ├── behaviors.py
-│       ├── circuit_breakers.py
-│       ├── bulkhead.py
-│       └── interceptors.py
-└── tests/                  # Test suite
-    ├── conftest.py
-    ├── core/               # Core module tests
-    ├── sync/               # Sync client tests
-    └── async_/             # Async client tests
-```
-
-### Code Style
-
-This project uses **ruff** for formatting and linting. Configuration is in `pyproject.toml`.
-
-- Line length: 100 characters
-- Quote style: Double quotes
-- Target Python: 3.12+
 
 ---
 
@@ -711,6 +589,229 @@ list_all_users()
 
 ---
 
+## Async Usage
+
+### Async Circuit Breaker
+
+The async circuit breaker registry works similarly to the sync version but uses async Redis operations:
+
+```python
+from reqlient import AsyncCircuitBreakerRegistry, AsyncRestClient
+
+# Configure registry once at startup (e.g., in FastAPI lifespan)
+await AsyncCircuitBreakerRegistry.configure(
+    redis_url="redis://localhost:6379/0",
+    default_fail_max=5,
+    default_reset_timeout=60
+)
+
+# Clients automatically get breakers from the registry
+async with AsyncRestClient(
+    base_url="https://api.payments.com/v1",
+    service_name="payment_api",
+) as client:
+    # Make requests...
+    pass
+```
+
+### Async Interceptors
+
+Create async interceptors for custom logic:
+
+```python
+from reqlient import AsyncInterceptor, RequestContext, ResponseContext, RestClientError
+
+class LoggingInterceptor(AsyncInterceptor):
+    async def on_before_request(self, request: RequestContext):
+        print(f"Making request to {request.url}")
+
+    async def on_after_response(self, response: ResponseContext):
+        print(f"Received response with status {response.status_code}")
+
+    async def on_error(self, error: RestClientError):
+        print(f"Request failed: {error}")
+
+# Use in async client
+interceptor = LoggingInterceptor()
+async_client = AsyncRestClient(
+    base_url="https://api.example.com/v1",
+    service_name="some_service",
+    interceptors=[interceptor]
+)
+```
+
+### Context Manager Usage
+
+Always use `async with` for proper cleanup:
+
+```python
+async with AsyncRestClient(
+    base_url="https://api.example.com/v1",
+    service_name="my_service"
+) as client:
+    user = await client.get("/users/1", response_data_schema=User)
+    # Client is automatically closed when exiting the context
+```
+
+---
+
+## Detailed Error Handling
+
+The client raises specific exceptions, allowing for fine-grained error handling.
+
+```python
+from reqlient import (
+    RateLimitError, ServerError, RestClientError,
+    CircuitBreakerOpenError, BulkheadFullError,
+)
+
+try:
+    # ... make a request ...
+except CircuitBreakerOpenError as e:
+    # The request was blocked by the circuit breaker.
+    # This is a good place to log that the external service is down.
+    print(f"Failing fast! The circuit breaker is open for this service: {e}")
+except BulkheadFullError as e:
+    # Too many concurrent requests to this service (local overload, not a
+    # downstream failure). Not retryable — shed load or return a cached value.
+    print(f"Bulkhead full for this service: {e}")
+except RateLimitError as e:
+    # The client has already waited for the 'Retry-After' header.
+    # You might want to log this or re-queue the task for later.
+    print(f"Rate limited. The request will need to be tried again later. Details: {e}")
+except ServerError as e:
+    # The service is likely down; retries have already been attempted.
+    print(f"The remote server is failing. Error: {e}")
+except RestClientError as e:
+    # Catch any other client error for generic handling.
+    print(f"An unexpected API error occurred: {e}")
+```
+
+---
+
+## Development Setup
+
+This project uses modern Python tooling for development:
+
+- **uv** - Fast Python package manager
+- **ruff** - Fast Python linter and formatter
+- **just** - Command runner (like Make)
+- **pytest** - Testing framework
+
+### Prerequisites
+
+1. Install **uv**: https://github.com/astral-sh/uv
+   ```bash
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   ```
+
+2. Install **just**: https://github.com/casey/just
+   ```bash
+   # macOS
+   brew install just
+   
+   # Linux
+   cargo install just
+   ```
+
+### Quick Start
+
+```bash
+# Install dependencies
+just install-dev
+
+# Run tests
+just test
+
+# Format code
+just format
+
+# Lint code
+just lint
+
+# Run all checks
+just check
+```
+
+### Available Commands
+
+Run `just` or `just help` to see all available commands:
+
+#### Development
+- `just install` - Install dependencies
+- `just install-dev` - Install with dev dependencies
+- `just test` - Run tests
+- `just test-cov` - Run tests with coverage
+- `just format` - Format code with ruff
+- `just lint` - Lint code with ruff
+- `just fix` - Format and fix linting issues
+- `just check` - Check formatting and linting
+
+#### Building
+- `just build` - Build package
+- `just clean` - Clean build artifacts
+
+#### Other
+- `just info` - Show project info
+- `just deps` - Show dependency tree
+- `just update` - Update dependencies
+
+### Workflow
+
+1. **Before committing:**
+   ```bash
+   just fix    # Format and fix linting
+   just test   # Run tests
+   ```
+
+2. **CI checks:**
+   ```bash
+   just ci     # Run all checks (format, lint, test)
+   ```
+
+### Project Structure
+
+```
+reqlient/
+├── pyproject.toml          # Project configuration (PEP 621)
+├── uv.lock                 # Locked dependencies (uv)
+├── Justfile                # Task runner commands
+├── CHANGELOG.md            # Release notes
+├── reqlient/               # Source code
+│   ├── __init__.py         # Main exports
+│   ├── core/               # Shared modules
+│   │   ├── config.py       # Config objects (Transport/Retry/CircuitBreaker/Bulkhead)
+│   │   ├── errors.py       # Error types
+│   │   └── request_response.py
+│   ├── sync/               # Synchronous client
+│   │   ├── rest_client.py
+│   │   ├── behaviors.py
+│   │   ├── circuit_breakers.py
+│   │   ├── bulkhead.py
+│   │   └── interceptors.py
+│   └── async_/             # Asynchronous client
+│       ├── rest_client.py
+│       ├── behaviors.py
+│       ├── circuit_breakers.py
+│       ├── bulkhead.py
+│       └── interceptors.py
+└── tests/                  # Test suite
+    ├── conftest.py
+    ├── core/               # Core module tests
+    ├── sync/               # Sync client tests
+    └── async_/             # Async client tests
+```
+
+### Code Style
+
+This project uses **ruff** for formatting and linting. Configuration is in `pyproject.toml`.
+
+- Line length: 100 characters
+- Quote style: Double quotes
+- Target Python: 3.12+
+
+---
+
 ## Testing
 
 Tests are located in the `tests/` directory and use pytest. The test suite is designed to be "battle-tested" and covers all major functionality, edge cases, and error scenarios.
@@ -873,106 +974,6 @@ just build-sdist
 
 # Build wheel
 just build-wheel
-```
-
----
-
-## Async Usage
-
-### Async Circuit Breaker
-
-The async circuit breaker registry works similarly to the sync version but uses async Redis operations:
-
-```python
-from reqlient import AsyncCircuitBreakerRegistry, AsyncRestClient
-
-# Configure registry once at startup (e.g., in FastAPI lifespan)
-await AsyncCircuitBreakerRegistry.configure(
-    redis_url="redis://localhost:6379/0",
-    default_fail_max=5,
-    default_reset_timeout=60
-)
-
-# Clients automatically get breakers from the registry
-async with AsyncRestClient(
-    base_url="https://api.payments.com/v1",
-    service_name="payment_api",
-) as client:
-    # Make requests...
-    pass
-```
-
-### Async Interceptors
-
-Create async interceptors for custom logic:
-
-```python
-from reqlient import AsyncInterceptor, RequestContext, ResponseContext, RestClientError
-
-class LoggingInterceptor(AsyncInterceptor):
-    async def on_before_request(self, request: RequestContext):
-        print(f"Making request to {request.url}")
-
-    async def on_after_response(self, response: ResponseContext):
-        print(f"Received response with status {response.status_code}")
-
-    async def on_error(self, error: RestClientError):
-        print(f"Request failed: {error}")
-
-# Use in async client
-interceptor = LoggingInterceptor()
-async_client = AsyncRestClient(
-    base_url="https://api.example.com/v1",
-    service_name="some_service",
-    interceptors=[interceptor]
-)
-```
-
-### Context Manager Usage
-
-Always use `async with` for proper cleanup:
-
-```python
-async with AsyncRestClient(
-    base_url="https://api.example.com/v1",
-    service_name="my_service"
-) as client:
-    user = await client.get("/users/1", response_data_schema=User)
-    # Client is automatically closed when exiting the context
-```
-
----
-
-## Detailed Error Handling
-
-The client raises specific exceptions, allowing for fine-grained error handling.
-
-```python
-from reqlient import (
-    RateLimitError, ServerError, RestClientError,
-    CircuitBreakerOpenError, BulkheadFullError,
-)
-
-try:
-    # ... make a request ...
-except CircuitBreakerOpenError as e:
-    # The request was blocked by the circuit breaker.
-    # This is a good place to log that the external service is down.
-    print(f"Failing fast! The circuit breaker is open for this service: {e}")
-except BulkheadFullError as e:
-    # Too many concurrent requests to this service (local overload, not a
-    # downstream failure). Not retryable — shed load or return a cached value.
-    print(f"Bulkhead full for this service: {e}")
-except RateLimitError as e:
-    # The client has already waited for the 'Retry-After' header.
-    # You might want to log this or re-queue the task for later.
-    print(f"Rate limited. The request will need to be tried again later. Details: {e}")
-except ServerError as e:
-    # The service is likely down; retries have already been attempted.
-    print(f"The remote server is failing. Error: {e}")
-except RestClientError as e:
-    # Catch any other client error for generic handling.
-    print(f"An unexpected API error occurred: {e}")
 ```
 
 ---
