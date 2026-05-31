@@ -26,6 +26,7 @@ from .core import (
     ConnectionError,
     ErrorContext,
     RateLimitError,
+    RequestContext,
     RequestError,
     RequestValidationError,
     ResourceNotFoundError,
@@ -38,7 +39,6 @@ from .core import (
     StatusCodeError,
     TimeoutError,
     TransportConfig,
-    RequestContext,
 )
 from .sync import (
     Bulkhead,

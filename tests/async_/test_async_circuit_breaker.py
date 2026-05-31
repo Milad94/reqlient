@@ -3,7 +3,6 @@ Comprehensive tests for async circuit breaker functionality.
 """
 
 import asyncio
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -212,17 +211,18 @@ class TestAsyncCircuitBreakerRegistry:
 
     async def test_get_returns_same_breaker_for_same_service(self):
         """Test that get() returns the same breaker for the same service name."""
-        breaker1 = await AsyncCircuitBreakerRegistry.get("same_service", fail_max=3, reset_timeout=5)
-        breaker2 = await AsyncCircuitBreakerRegistry.get("same_service", fail_max=10, reset_timeout=60)
+        breaker1 = await AsyncCircuitBreakerRegistry.get(
+            "same_service", fail_max=3, reset_timeout=5
+        )
+        breaker2 = await AsyncCircuitBreakerRegistry.get(
+            "same_service", fail_max=10, reset_timeout=60
+        )
         # Should be the exact same instance
         assert breaker1 is breaker2
 
     async def test_configure_sets_defaults(self):
         """Test that configure() sets default values."""
-        await AsyncCircuitBreakerRegistry.configure(
-            default_fail_max=10,
-            default_reset_timeout=120
-        )
+        await AsyncCircuitBreakerRegistry.configure(default_fail_max=10, default_reset_timeout=120)
         assert AsyncCircuitBreakerRegistry.is_configured()
 
     async def test_reset_clears_breakers(self):

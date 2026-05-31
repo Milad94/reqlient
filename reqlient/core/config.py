@@ -10,10 +10,9 @@ shared safely as a constructor default value.
 """
 
 from dataclasses import dataclass
-from typing import Dict, FrozenSet, Optional
 
 # Single source of truth for the default set of retryable HTTP status codes.
-DEFAULT_RETRY_STATUS_CODES: FrozenSet[int] = frozenset({408, 429, 500, 502, 503, 504})
+DEFAULT_RETRY_STATUS_CODES: frozenset[int] = frozenset({408, 429, 500, 502, 503, 504})
 
 
 @dataclass(frozen=True)
@@ -29,7 +28,7 @@ class TransportConfig:
 
     timeout: int = 30
     verify_ssl: bool = True
-    default_headers: Optional[Dict[str, str]] = None
+    default_headers: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -44,7 +43,7 @@ class RetryConfig:
 
     max_retries: int = 3
     backoff_factor: float = 0.5
-    status_codes: FrozenSet[int] = DEFAULT_RETRY_STATUS_CODES
+    status_codes: frozenset[int] = DEFAULT_RETRY_STATUS_CODES
 
 
 @dataclass(frozen=True)

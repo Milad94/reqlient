@@ -226,7 +226,9 @@ class TestAsyncRestClientPost:
             )
 
             new_user = User(id=0, name="Jane", email="jane@example.com")
-            user = await async_client.post("/users", request_data=new_user, response_data_schema=User)
+            user = await async_client.post(
+                "/users", request_data=new_user, response_data_schema=User
+            )
             assert user is not None
             assert user.id == 2
             assert user.name == "Jane"
@@ -440,7 +442,9 @@ class TestAsyncRestClientErrorHandling:
             )
 
             with pytest.raises(ResourceNotFoundError) as exc_info:
-                await async_client.get("/users/1", response_data_schema=User, params={"test": "param"})
+                await async_client.get(
+                    "/users/1", response_data_schema=User, params={"test": "param"}
+                )
 
             context = exc_info.value.context
             assert context is not None
@@ -500,7 +504,6 @@ class TestAsyncRestClientPerRequestOverrides:
             # Override max_retries to 0 for this request
             with pytest.raises(ConnectionError):
                 await async_client.get("/users/1", response_data_schema=User, max_retries=0)
-
 
 
 @pytest.mark.asyncio

@@ -2,7 +2,7 @@
 Comprehensive tests for all behaviors in the pipeline.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -207,9 +207,7 @@ class TestResponseValidationBehavior:
         )
         mock_next.handle.return_value = mock_response
 
-        behavior = ResponseValidationBehavior(
-            response_data_schema=User, next_behavior=mock_next
-        )
+        behavior = ResponseValidationBehavior(response_data_schema=User, next_behavior=mock_next)
         request = RequestContext(
             method="GET",
             url="https://api.example.com/v1/users/1",
@@ -238,9 +236,7 @@ class TestResponseValidationBehavior:
         )
         mock_next.handle.return_value = mock_response
 
-        behavior = ResponseValidationBehavior(
-            response_data_schema=User, next_behavior=mock_next
-        )
+        behavior = ResponseValidationBehavior(response_data_schema=User, next_behavior=mock_next)
         request = RequestContext(
             method="GET",
             url="https://api.example.com/v1/users/1",
@@ -271,9 +267,7 @@ class TestResponseValidationBehavior:
         )
         mock_next.handle.return_value = mock_response
 
-        behavior = ResponseValidationBehavior(
-            response_data_schema=User, next_behavior=mock_next
-        )
+        behavior = ResponseValidationBehavior(response_data_schema=User, next_behavior=mock_next)
         request = RequestContext(
             method="DELETE",
             url="https://api.example.com/v1/users/1",

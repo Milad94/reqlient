@@ -131,7 +131,9 @@ class TestRestClientGet:
             json={"id": 1, "name": "John", "email": "john@example.com"},
         )
 
-        response = basic_client.get("/users/1", response_data_schema=User, headers={"X-Custom": "value"})
+        response = basic_client.get(
+            "/users/1", response_data_schema=User, headers={"X-Custom": "value"}
+        )
         assert response is not None
         assert requests_mock.last_request.headers["X-Custom"] == "value"
 
@@ -272,7 +274,10 @@ class TestRestClientPost:
 
         with pytest.raises(ResponseValidationError):
             basic_client.post(
-                "/users", request_data=invalid_request, response_data_schema=UserResponse, max_retries=0
+                "/users",
+                request_data=invalid_request,
+                response_data_schema=UserResponse,
+                max_retries=0,
             )
 
     def test_post_response_validation_error(self, basic_client, requests_mock, create_user_request):

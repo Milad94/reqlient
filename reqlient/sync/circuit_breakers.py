@@ -1,6 +1,5 @@
 import logging
 import threading
-from typing import Optional, Set
 
 import redis
 from pybreaker import STATE_CLOSED, CircuitBreaker, CircuitRedisStorage
@@ -33,18 +32,18 @@ class CircuitBreakerRegistry:
         breaker = CircuitBreakerRegistry.get("payments", fail_max=3)
     """
 
-    _redis_url: Optional[str] = None
+    _redis_url: str | None = None
     _default_fail_max: int = 5
     _default_reset_timeout: int = 60
     _breakers: dict[str, CircuitBreaker] = {}
-    _redis_client: Optional[redis.Redis] = None
+    _redis_client: redis.Redis | None = None
     _configured: bool = False
     _lock: threading.Lock = threading.Lock()
 
     @classmethod
     def configure(
         cls,
-        redis_url: Optional[str] = None,
+        redis_url: str | None = None,
         default_fail_max: int = 5,
         default_reset_timeout: int = 60,
     ) -> None:
@@ -87,8 +86,8 @@ class CircuitBreakerRegistry:
     def get(
         cls,
         service_name: str,
-        fail_max: Optional[int] = None,
-        reset_timeout: Optional[int] = None,
+        fail_max: int | None = None,
+        reset_timeout: int | None = None,
     ) -> CircuitBreaker:
         """
         Get or create a circuit breaker for a service.
@@ -138,9 +137,7 @@ class CircuitBreakerRegistry:
                 )
                 logger.info(f"Created Redis-backed circuit breaker for {service_name}")
                 return CircuitBreaker(
-                    fail_max=fail_max,
-                    reset_timeout=reset_timeout,
-                    state_storage=state_storage
+                    fail_max=fail_max, reset_timeout=reset_timeout, state_storage=state_storage
                 )
             except Exception as e:
                 logger.warning(
@@ -176,6 +173,6 @@ class CircuitBreakerRegistry:
         return cls._configured
 
     @classmethod
-    def get_registered_services(cls) -> Set[str]:
+    def get_registered_services(cls) -> set[str]:
         """Get the set of service names that have breakers registered."""
         return set(cls._breakers.keys())

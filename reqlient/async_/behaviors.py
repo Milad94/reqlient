@@ -2,15 +2,13 @@ import asyncio
 import logging
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Collection
 from datetime import datetime
-from typing import Any, Dict, Generic, List, Optional, Set, Type, get_origin
+from typing import Any, Generic, Optional, get_origin
 
 import httpx
 from pydantic import TypeAdapter
 
-from .bulkhead import AsyncBulkhead
-from .circuit_breakers import AsyncCircuitBreaker
-from .interceptors import AsyncInterceptor
 from ..core.errors import (
     AuthenticationError,
     AuthorizationError,
@@ -33,10 +31,13 @@ from ..core.errors import (
 )
 from ..core.request_response import RequestContext, RequestT, ResponseContext, ResponseT
 from ..core.utils import sanitize_sensitive_data
+from .bulkhead import AsyncBulkhead
+from .circuit_breakers import AsyncCircuitBreaker
+from .interceptors import AsyncInterceptor
 
 
 def _create_error_context(
-    request: RequestContext, error: Exception, response: Optional[ResponseContext] = None
+    request: RequestContext, error: Exception, response: ResponseContext | None = None
 ) -> ErrorContext:
     """Create a detailed error context for logging and error reporting."""
     return ErrorContext(
@@ -115,7 +116,7 @@ class AsyncLoggingBehavior(AsyncBehavior):
 class AsyncRequestDataSchemaValidationBehavior(AsyncBehavior):
     """Behavior for validating request data only."""
 
-    def __init__(self, request_data_schema: Optional[Type[RequestT]] = None, **kwargs):
+    def __init__(self, request_data_schema: type[RequestT] | None = None, **kwargs):
         super().__init__(**kwargs)
         self.request_data_schema = request_data_schema
 
@@ -123,7 +124,9 @@ class AsyncRequestDataSchemaValidationBehavior(AsyncBehavior):
         """Validate request data against Pydantic model."""
         if request.data is not None:
             # Use the request_data_schema from request context if available, otherwise fall back to instance type
-            request_data_schema = getattr(request, "request_data_schema", None) or self.request_data_schema
+            request_data_schema = (
+                getattr(request, "request_data_schema", None) or self.request_data_schema
+            )
             # Skip validation if request_data_schema is None or a TypeVar (not a concrete type)
             if request_data_schema is not None:
                 from typing import TypeVar
@@ -138,11 +141,13 @@ class AsyncRequestDataSchemaValidationBehavior(AsyncBehavior):
                             # Generic type like list[Model] - use TypeAdapter
                             adapter = TypeAdapter(request_data_schema)
                             validated_data = adapter.validate_python(request.data)
-                            request.data = adapter.dump_python(validated_data, by_alias=True, mode='json')
+                            request.data = adapter.dump_python(
+                                validated_data, by_alias=True, mode="json"
+                            )
                         else:
                             # Regular Pydantic model
                             validated_data = request_data_schema.model_validate(request.data)
-                            request.data = validated_data.model_dump(by_alias=True, mode='json')
+                            request.data = validated_data.model_dump(by_alias=True, mode="json")
                     except Exception as e:
                         error_context = _create_error_context(request, e)
                         raise RequestValidationError(
@@ -155,7 +160,7 @@ class AsyncRequestDataSchemaValidationBehavior(AsyncBehavior):
 class AsyncResponseDataSchemaValidationBehavior(AsyncBehavior):
     """Behavior for validating response data only. This is outside the retry wrapper."""
 
-    def __init__(self, response_data_schema: Optional[Type[ResponseT]] = None, **kwargs):
+    def __init__(self, response_data_schema: type[ResponseT] | None = None, **kwargs):
         super().__init__(**kwargs)
         self.response_data_schema = response_data_schema
 
@@ -167,7 +172,9 @@ class AsyncResponseDataSchemaValidationBehavior(AsyncBehavior):
         # This correctly handles 204 No Content responses and TypeVar cases.
         if response.data is not None:
             # Use the response_data_schema from request context if available, otherwise fall back to instance type
-            response_data_schema = getattr(request, "response_data_schema", None) or self.response_data_schema
+            response_data_schema = (
+                getattr(request, "response_data_schema", None) or self.response_data_schema
+            )
             # Skip validation if response_data_schema is None or a TypeVar (not a concrete type)
             if response_data_schema is not None:
                 from typing import TypeVar
@@ -202,7 +209,7 @@ class AsyncRetryBehavior(AsyncBehavior):
         self,
         max_retries: int,
         backoff_factor: float,
-        retry_status_codes: Set[int],
+        retry_status_codes: Collection[int],
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -276,10 +283,12 @@ class AsyncIdempotencyHeaderBehavior(AsyncBehavior):
 
     async def handle(self, request: RequestContext) -> ResponseContext:
         """Add X-Idempotency-Key header for POST/PUT/PATCH/DELETE requests if not present."""
-        if request.method in ["POST", "PUT", "PATCH", "DELETE"]:
-            if "X-Idempotency-Key" not in request.headers:
-                request.headers["X-Idempotency-Key"] = str(uuid.uuid4())
-        
+        if (
+            request.method in ["POST", "PUT", "PATCH", "DELETE"]
+            and "X-Idempotency-Key" not in request.headers
+        ):
+            request.headers["X-Idempotency-Key"] = str(uuid.uuid4())
+
         return await self._handle_next(request)
 
 
@@ -304,7 +313,7 @@ class AsyncHttpBehavior(AsyncBehavior):
                 timeout=self.timeout,
             )
 
-            response_data: Optional[Dict[str, Any]] = None
+            response_data: dict[str, Any] | None = None
             if response.content:
                 try:
                     response_data = response.json()
@@ -353,9 +362,7 @@ class AsyncBulkheadBehavior(AsyncBehavior):
     async def handle(self, request: RequestContext) -> ResponseContext:
         """Acquire a concurrency slot, run the request, then release the slot."""
         if not await self.bulkhead.try_acquire():
-            error_context = _create_error_context(
-                request, Exception("Bulkhead is full")
-            )
+            error_context = _create_error_context(request, Exception("Bulkhead is full"))
             raise BulkheadFullError(
                 f"Bulkhead for '{self.bulkhead.service_name}' is full "
                 f"(max {self.bulkhead.max_concurrent} concurrent requests)",
@@ -431,9 +438,7 @@ class AsyncStatusCodeValidationBehavior(AsyncBehavior):
 
         # Check for other 4xx client errors
         if 400 <= status_code < 500:
-            error_context = _create_error_context(
-                request, Exception("Client error"), response
-            )
+            error_context = _create_error_context(request, Exception("Client error"), response)
             raise StatusCodeError(f"Client error ({status_code})", context=error_context)
 
         # 2xx and 3xx are considered successful (3xx redirects are typically handled by HTTP library)
@@ -449,7 +454,7 @@ class AsyncInterceptorBehavior(AsyncBehavior):
     and external, user-provided logic.
     """
 
-    def __init__(self, interceptors: List[AsyncInterceptor], **kwargs):
+    def __init__(self, interceptors: list[AsyncInterceptor], **kwargs):
         super().__init__(**kwargs)
         self.interceptors = interceptors
 

@@ -1,7 +1,7 @@
 import logging
 import threading
 from datetime import datetime
-from typing import Generic, List, Optional, Type, get_origin
+from typing import Generic, get_origin
 from urllib.parse import urljoin
 
 import httpx
@@ -50,11 +50,11 @@ class RestClient(Generic[RequestT, ResponseT]):
         service_name: str,
         *,
         transport: TransportConfig = TransportConfig(),
-        retry: Optional[RetryConfig] = RetryConfig(),
-        circuit_breaker: Optional[CircuitBreakerConfig] = CircuitBreakerConfig(),
-        bulkhead: Optional[BulkheadConfig] = None,
-        logger: Optional[logging.Logger] = None,
-        interceptors: Optional[List[Interceptor]] = None,
+        retry: RetryConfig | None = RetryConfig(),
+        circuit_breaker: CircuitBreakerConfig | None = CircuitBreakerConfig(),
+        bulkhead: BulkheadConfig | None = None,
+        logger: logging.Logger | None = None,
+        interceptors: list[Interceptor] | None = None,
     ):
         """
         Initialize the RestClient.
@@ -111,10 +111,16 @@ class RestClient(Generic[RequestT, ResponseT]):
 
         # Build separate pipelines for read and write operations.
         self.read_pipeline = self.__build_read_pipeline(
-            breaker=resolved_breaker, bulkhead=resolved_bulkhead, retry=retry, interceptors=interceptors
+            breaker=resolved_breaker,
+            bulkhead=resolved_bulkhead,
+            retry=retry,
+            interceptors=interceptors,
         )
         self.write_pipeline = self.__build_write_pipeline(
-            breaker=resolved_breaker, bulkhead=resolved_bulkhead, retry=retry, interceptors=interceptors
+            breaker=resolved_breaker,
+            bulkhead=resolved_bulkhead,
+            retry=retry,
+            interceptors=interceptors,
         )
 
     @property
@@ -136,10 +142,10 @@ class RestClient(Generic[RequestT, ResponseT]):
 
     def __build_read_pipeline(
         self,
-        breaker: Optional[CircuitBreaker],
-        bulkhead: Optional[Bulkhead],
-        retry: Optional[RetryConfig],
-        interceptors: Optional[List[Interceptor]],
+        breaker: CircuitBreaker | None,
+        bulkhead: Bulkhead | None,
+        retry: RetryConfig | None,
+        interceptors: list[Interceptor] | None,
     ) -> Behavior:
         """
         Build the read pipeline for GET and HEAD requests.
@@ -196,10 +202,10 @@ class RestClient(Generic[RequestT, ResponseT]):
 
     def __build_write_pipeline(
         self,
-        breaker: Optional[CircuitBreaker],
-        bulkhead: Optional[Bulkhead],
-        retry: Optional[RetryConfig],
-        interceptors: Optional[List[Interceptor]],
+        breaker: CircuitBreaker | None,
+        bulkhead: Bulkhead | None,
+        retry: RetryConfig | None,
+        interceptors: list[Interceptor] | None,
     ) -> Behavior:
         """
         Build the write pipeline for POST, PUT, PATCH, and DELETE requests.
@@ -262,7 +268,7 @@ class RestClient(Generic[RequestT, ResponseT]):
         self,
         request_context: RequestContext,
         error: Exception,
-        response_context: Optional[ResponseContext] = None,
+        response_context: ResponseContext | None = None,
     ) -> ErrorContext:
         """Create a detailed error context for logging and error reporting."""
         return ErrorContext(
@@ -283,14 +289,14 @@ class RestClient(Generic[RequestT, ResponseT]):
         self,
         method: str,
         endpoint: str,
-        response_data_schema: Type[ResponseT],
-        request_data: Optional[RequestT] = None,
-        params: Optional[dict[str, str]] = None,
-        headers: Optional[dict[str, str]] = None,
+        response_data_schema: type[ResponseT],
+        request_data: RequestT | None = None,
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
         # Per-request overrides
-        max_retries: Optional[int] = None,
-        retry_backoff_factor: Optional[float] = None,
-    ) -> Optional[ResponseT]:
+        max_retries: int | None = None,
+        retry_backoff_factor: float | None = None,
+    ) -> ResponseT | None:
         """
         Execute an HTTP request by processing it through the behavior pipeline.
 
@@ -336,7 +342,7 @@ class RestClient(Generic[RequestT, ResponseT]):
             url=url,
             headers=final_headers,
             params=params,
-            data=request_data.model_dump(by_alias=True, mode='json') if request_data else None,
+            data=request_data.model_dump(by_alias=True, mode="json") if request_data else None,
             context={
                 "max_retries": max_retries,
                 "retry_backoff_factor": retry_backoff_factor,
@@ -383,12 +389,12 @@ class RestClient(Generic[RequestT, ResponseT]):
     def get(
         self,
         endpoint: str,
-        response_data_schema: Type[ResponseT],
-        params: Optional[dict[str, str]] = None,
-        headers: Optional[dict[str, str]] = None,
-        max_retries: Optional[int] = None,
-        retry_backoff_factor: Optional[float] = None,
-    ) -> Optional[ResponseT]:
+        response_data_schema: type[ResponseT],
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
+        max_retries: int | None = None,
+        retry_backoff_factor: float | None = None,
+    ) -> ResponseT | None:
         """
         Make a GET request
 
@@ -417,12 +423,12 @@ class RestClient(Generic[RequestT, ResponseT]):
         self,
         endpoint: str,
         request_data: RequestT,
-        response_data_schema: Type[ResponseT],
-        params: Optional[dict[str, str]] = None,
-        headers: Optional[dict[str, str]] = None,
-        max_retries: Optional[int] = None,
-        retry_backoff_factor: Optional[float] = None,
-    ) -> Optional[ResponseT]:
+        response_data_schema: type[ResponseT],
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
+        max_retries: int | None = None,
+        retry_backoff_factor: float | None = None,
+    ) -> ResponseT | None:
         """Make a POST request"""
         return self.__request(
             method="POST",
@@ -439,12 +445,12 @@ class RestClient(Generic[RequestT, ResponseT]):
         self,
         endpoint: str,
         request_data: RequestT,
-        response_data_schema: Type[ResponseT],
-        params: Optional[dict[str, str]] = None,
-        headers: Optional[dict[str, str]] = None,
-        max_retries: Optional[int] = None,
-        retry_backoff_factor: Optional[float] = None,
-    ) -> Optional[ResponseT]:
+        response_data_schema: type[ResponseT],
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
+        max_retries: int | None = None,
+        retry_backoff_factor: float | None = None,
+    ) -> ResponseT | None:
         """Make a PUT request"""
         return self.__request(
             method="PUT",
@@ -460,12 +466,12 @@ class RestClient(Generic[RequestT, ResponseT]):
     def delete(
         self,
         endpoint: str,
-        response_data_schema: Type[ResponseT],
-        params: Optional[dict[str, str]] = None,
-        headers: Optional[dict[str, str]] = None,
-        max_retries: Optional[int] = None,
-        retry_backoff_factor: Optional[float] = None,
-    ) -> Optional[ResponseT]:
+        response_data_schema: type[ResponseT],
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
+        max_retries: int | None = None,
+        retry_backoff_factor: float | None = None,
+    ) -> ResponseT | None:
         """Make a DELETE request"""
         return self.__request(
             method="DELETE",
@@ -482,12 +488,12 @@ class RestClient(Generic[RequestT, ResponseT]):
         self,
         endpoint: str,
         request_data: RequestT,
-        response_data_schema: Type[ResponseT],
-        params: Optional[dict[str, str]] = None,
-        headers: Optional[dict[str, str]] = None,
-        max_retries: Optional[int] = None,
-        retry_backoff_factor: Optional[float] = None,
-    ) -> Optional[ResponseT]:
+        response_data_schema: type[ResponseT],
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
+        max_retries: int | None = None,
+        retry_backoff_factor: float | None = None,
+    ) -> ResponseT | None:
         """Make a PATCH request"""
         return self.__request(
             method="PATCH",

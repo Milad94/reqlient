@@ -10,11 +10,8 @@ from pydantic import BaseModel
 
 from reqlient.async_.behaviors import (
     AsyncHttpBehavior,
-    AsyncIdempotencyHeaderBehavior,
     AsyncInterceptorBehavior,
     AsyncLoggingBehavior,
-    AsyncRequestDataSchemaValidationBehavior,
-    AsyncResponseDataSchemaValidationBehavior,
     AsyncRetryBehavior,
     AsyncStatusCodeValidationBehavior,
 )
@@ -22,9 +19,7 @@ from reqlient.async_.interceptors import AsyncInterceptor
 from reqlient.core.errors import (
     AuthenticationError,
     ConnectionError,
-    RequestValidationError,
     ResourceNotFoundError,
-    ResponseValidationError,
     TimeoutError,
 )
 from reqlient.core.request_response import RequestContext, ResponseContext
@@ -168,7 +163,6 @@ class TestAsyncHttpBehavior:
         """Test that HTTP request is made."""
         async with httpx.AsyncClient() as client:
             # Mock the request method
-            original_request = client.request
             mock_response = httpx.Response(
                 200,
                 json={"id": 1, "name": "John", "email": "john@example.com"},

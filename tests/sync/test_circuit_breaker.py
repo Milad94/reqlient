@@ -168,10 +168,7 @@ class TestCircuitBreakerRegistry:
 
     def test_configure_sets_defaults(self):
         """Test that configure() sets default values."""
-        CircuitBreakerRegistry.configure(
-            default_fail_max=10,
-            default_reset_timeout=120
-        )
+        CircuitBreakerRegistry.configure(default_fail_max=10, default_reset_timeout=120)
         assert CircuitBreakerRegistry.is_configured()
 
     def test_reset_clears_breakers(self):

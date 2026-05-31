@@ -1,9 +1,9 @@
-from typing import Any, Optional, Set
+from typing import Any
 
 from pydantic import BaseModel
 
 
-def sanitize_sensitive_data(data: Any, sensitive_fields: Optional[Set[str]] = None) -> Any:
+def sanitize_sensitive_data(data: Any, sensitive_fields: set[str] | None = None) -> Any:
     """Recursively sanitizes sensitive data in nested dictionaries, lists, and Pydantic models.
 
     It replaces the values of fields matching a predefined list of sensitive keys with '********'.

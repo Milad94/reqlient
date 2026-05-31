@@ -13,7 +13,6 @@ via a counting semaphore.
 
 import logging
 import threading
-from typing import Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -91,8 +90,8 @@ class BulkheadRegistry:
     def get(
         cls,
         service_name: str,
-        max_concurrent: Optional[int] = None,
-        max_wait: Optional[float] = None,
+        max_concurrent: int | None = None,
+        max_wait: float | None = None,
     ) -> Bulkhead:
         """Get or create the bulkhead for a service.
 
@@ -133,6 +132,6 @@ class BulkheadRegistry:
         return cls._configured
 
     @classmethod
-    def get_registered_services(cls) -> Set[str]:
+    def get_registered_services(cls) -> set[str]:
         """Get the set of service names that have bulkheads registered."""
         return set(cls._bulkheads.keys())

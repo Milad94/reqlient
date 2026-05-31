@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 @dataclass
@@ -10,12 +10,12 @@ class ErrorContext:
     timestamp: datetime
     request_url: str
     request_method: str
-    request_headers: Dict[str, str]
-    request_params: Optional[Dict[str, str]]
-    request_data: Optional[Dict[str, Any]]
-    response_status: Optional[int]
-    response_headers: Optional[Dict[str, str]]
-    response_data: Optional[Dict[str, Any]]
+    request_headers: dict[str, str]
+    request_params: dict[str, str] | None
+    request_data: dict[str, Any] | None
+    response_status: int | None
+    response_headers: dict[str, str] | None
+    response_data: dict[str, Any] | None
     error_message: str
     error_type: str
     retry_count: int = 0
@@ -24,7 +24,7 @@ class ErrorContext:
 class RestClientError(Exception):
     """Base exception for all RestClient errors, containing rich context."""
 
-    def __init__(self, message: str, context: Optional[ErrorContext] = None):
+    def __init__(self, message: str, context: ErrorContext | None = None):
         self.context = context
         self.message = message
         super().__init__(message)

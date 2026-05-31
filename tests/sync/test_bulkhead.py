@@ -194,7 +194,9 @@ class TestRestClientBulkhead:
         bulkhead.release()
         assert client.get("/users/1", response_data_schema=User) is not None
 
-    def test_bulkhead_full_does_not_trip_circuit_breaker(self, base_url, mock_logger, requests_mock):
+    def test_bulkhead_full_does_not_trip_circuit_breaker(
+        self, base_url, mock_logger, requests_mock
+    ):
         """Placement check: a full bulkhead is outside the breaker, so it must
         not be counted as a downstream failure (which would open the breaker)."""
         requests_mock.get(

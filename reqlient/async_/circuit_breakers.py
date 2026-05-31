@@ -2,7 +2,8 @@ import asyncio
 import logging
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Optional, Set
+from collections.abc import Callable
+from typing import Any
 
 import redis.asyncio as aioredis
 
@@ -20,7 +21,7 @@ class AsyncCircuitBreakerStorage(ABC):
     """Abstract base class for async circuit breaker storage."""
 
     @abstractmethod
-    async def get_state(self, key: str) -> Optional[str]:
+    async def get_state(self, key: str) -> str | None:
         """Get the circuit breaker state."""
 
     @abstractmethod
@@ -44,7 +45,7 @@ class AsyncCircuitBreakerStorage(ABC):
         """Set the last failure timestamp."""
 
     @abstractmethod
-    async def get_last_failure_time(self, key: str) -> Optional[float]:
+    async def get_last_failure_time(self, key: str) -> float | None:
         """Get the last failure timestamp."""
 
 
@@ -60,7 +61,7 @@ class AsyncInMemoryStorage(AsyncCircuitBreakerStorage):
         """Generate a namespaced key."""
         return f"{self.namespace}:{suffix}"
 
-    async def get_state(self, key: str) -> Optional[str]:
+    async def get_state(self, key: str) -> str | None:
         """Get the circuit breaker state."""
         async with self._lock:
             return self._state.get(self._get_key(f"{key}:state"))
@@ -94,7 +95,7 @@ class AsyncInMemoryStorage(AsyncCircuitBreakerStorage):
         async with self._lock:
             self._state[self._get_key(f"{key}:last_failure")] = timestamp
 
-    async def get_last_failure_time(self, key: str) -> Optional[float]:
+    async def get_last_failure_time(self, key: str) -> float | None:
         """Get the last failure timestamp."""
         async with self._lock:
             return self._state.get(self._get_key(f"{key}:last_failure"))
@@ -111,7 +112,7 @@ class AsyncRedisStorage(AsyncCircuitBreakerStorage):
         """Generate a namespaced Redis key."""
         return f"breaker:{self.namespace}:{suffix}"
 
-    async def get_state(self, key: str) -> Optional[str]:
+    async def get_state(self, key: str) -> str | None:
         """Get the circuit breaker state."""
         try:
             value = await self.redis_client.get(self._get_key(f"{key}:state"))
@@ -160,7 +161,7 @@ class AsyncRedisStorage(AsyncCircuitBreakerStorage):
         except Exception as e:
             logger.warning(f"Failed to set last failure time in Redis: {e}")
 
-    async def get_last_failure_time(self, key: str) -> Optional[float]:
+    async def get_last_failure_time(self, key: str) -> float | None:
         """Get the last failure timestamp."""
         try:
             value = await self.redis_client.get(self._get_key(f"{key}:last_failure"))
@@ -192,9 +193,9 @@ class AsyncCircuitBreaker:
         self,
         fail_max: int = 5,
         reset_timeout: int = 60,
-        storage: Optional[AsyncCircuitBreakerStorage] = None,
+        storage: AsyncCircuitBreakerStorage | None = None,
         service_name: str = "default",
-        exclude: Optional[tuple[type[Exception], ...]] = None,
+        exclude: tuple[type[Exception], ...] | None = None,
     ):
         """
         Initialize async circuit breaker.
@@ -235,7 +236,7 @@ class AsyncCircuitBreaker:
         """Reset failure count."""
         await self.storage.reset_failure_count(self.service_name)
 
-    async def _get_last_failure_time(self) -> Optional[float]:
+    async def _get_last_failure_time(self) -> float | None:
         """Get last failure timestamp."""
         return await self.storage.get_last_failure_time(self.service_name)
 
@@ -362,17 +363,17 @@ class AsyncCircuitBreakerRegistry:
         breaker = await AsyncCircuitBreakerRegistry.get("payments", fail_max=3)
     """
 
-    _redis_url: Optional[str] = None
+    _redis_url: str | None = None
     _default_fail_max: int = 5
     _default_reset_timeout: int = 60
     _breakers: dict[str, AsyncCircuitBreaker] = {}
-    _redis_client: Optional[aioredis.Redis] = None
+    _redis_client: aioredis.Redis | None = None
     _configured: bool = False
 
     @classmethod
     async def configure(
         cls,
-        redis_url: Optional[str] = None,
+        redis_url: str | None = None,
         default_fail_max: int = 5,
         default_reset_timeout: int = 60,
     ) -> None:
@@ -396,7 +397,7 @@ class AsyncCircuitBreakerRegistry:
         if redis_url:
             try:
                 cls._redis_client = await aioredis.from_url(redis_url)
-                await cls._redis_client.ping()
+                await cls._redis_client.ping()  # type: ignore[misc]  # redis-py sync/async union
                 logger.info(f"AsyncCircuitBreakerRegistry connected to Redis at {redis_url}")
             except Exception as e:
                 logger.warning(
@@ -415,8 +416,8 @@ class AsyncCircuitBreakerRegistry:
     async def get(
         cls,
         service_name: str,
-        fail_max: Optional[int] = None,
-        reset_timeout: Optional[int] = None,
+        fail_max: int | None = None,
+        reset_timeout: int | None = None,
     ) -> AsyncCircuitBreaker:
         """
         Get or create an async circuit breaker for a service.
@@ -453,10 +454,7 @@ class AsyncCircuitBreakerRegistry:
         """Create a new async circuit breaker instance."""
         if cls._redis_client is not None:
             try:
-                storage = AsyncRedisStorage(
-                    redis_client=cls._redis_client,
-                    namespace=service_name
-                )
+                storage = AsyncRedisStorage(redis_client=cls._redis_client, namespace=service_name)
                 logger.info(f"Created Redis-backed async circuit breaker for {service_name}")
                 return AsyncCircuitBreaker(
                     fail_max=fail_max,
@@ -501,6 +499,6 @@ class AsyncCircuitBreakerRegistry:
         return cls._configured
 
     @classmethod
-    def get_registered_services(cls) -> Set[str]:
+    def get_registered_services(cls) -> set[str]:
         """Get the set of service names that have breakers registered."""
         return set(cls._breakers.keys())

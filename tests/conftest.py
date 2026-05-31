@@ -113,6 +113,7 @@ class _RespxAdapter:
     def request_history(self):
         return [_RecordedRequest(call.request) for call in self._router.calls]
 
+
 # Disable logging during tests unless explicitly needed
 logging.getLogger().setLevel(logging.CRITICAL)
 

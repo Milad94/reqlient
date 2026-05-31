@@ -97,12 +97,16 @@ lint:
 lint-fix:
     uv run ruff check --fix .
 
+# Static type check
+typecheck:
+    uv run mypy
+
 # Format and fix all issues
 fix: format lint-fix
     @echo "✓ Code formatted and linted"
 
-# Check formatting and linting (no fixes)
-check: format-check lint
+# Check formatting, linting, and types (no fixes)
+check: format-check lint typecheck
     @echo "✓ All checks passed"
 
 # ============================================================================

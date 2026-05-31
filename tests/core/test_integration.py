@@ -79,7 +79,6 @@ class TestFullPipeline:
             ],
         )
 
-
         client = RestClient(
             base_url="https://api.example.com/v1",
             service_name="test",
@@ -224,7 +223,6 @@ class TestFullPipeline:
             ],
         )
 
-
         client = RestClient(
             base_url="https://api.example.com/v1",
             service_name="test",
@@ -338,7 +336,9 @@ class TestRealWorldScenarios:
 
             def create_user(self, name: str, email: str) -> User:
                 request_data = CreateUserRequest(name=name, email=email)
-                return self._client.post("/users", request_data=request_data, response_data_schema=User)
+                return self._client.post(
+                    "/users", request_data=request_data, response_data_schema=User
+                )
 
         requests_mock.get(
             "https://api.example.com/v1/users/123",

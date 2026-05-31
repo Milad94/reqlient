@@ -7,7 +7,6 @@ See ``reqlient.sync.bulkhead`` for the rationale. The async variant uses an
 import asyncio
 import logging
 import threading
-from typing import Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +36,7 @@ class AsyncBulkhead:
             try:
                 await asyncio.wait_for(self._semaphore.acquire(), timeout=self.max_wait)
                 return True
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 return False
 
         # Immediate (non-blocking) acquire. asyncio is single-threaded, so there
@@ -81,8 +80,8 @@ class AsyncBulkheadRegistry:
     def get(
         cls,
         service_name: str,
-        max_concurrent: Optional[int] = None,
-        max_wait: Optional[float] = None,
+        max_concurrent: int | None = None,
+        max_wait: float | None = None,
     ) -> AsyncBulkhead:
         """Get or create the async bulkhead for a service (first config wins)."""
         with cls._lock:
@@ -118,6 +117,6 @@ class AsyncBulkheadRegistry:
         return cls._configured
 
     @classmethod
-    def get_registered_services(cls) -> Set[str]:
+    def get_registered_services(cls) -> set[str]:
         """Get the set of service names that have bulkheads registered."""
         return set(cls._bulkheads.keys())

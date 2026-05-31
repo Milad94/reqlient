@@ -49,6 +49,7 @@ class TraceContextInterceptor(AsyncInterceptor):
     async def on_before_request(self, request: RequestContext):
         try:
             from felesh_shared_package.scaffold.common.seedwork.api.metadata import get_request_id
+
             request_id = get_request_id()
             if request_id:
                 request.headers["X-Request-ID"] = request_id
@@ -56,6 +57,7 @@ class TraceContextInterceptor(AsyncInterceptor):
             pass
         try:
             from opentelemetry import propagate
+
             propagate.inject(request.headers)
         except ImportError:
             pass

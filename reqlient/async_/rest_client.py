@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime
-from typing import Generic, List, Optional, Type, get_origin
+from typing import Generic, get_origin
 from urllib.parse import urljoin
 
 import httpx
@@ -49,12 +49,12 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
         service_name: str,
         *,
         transport: TransportConfig = TransportConfig(),
-        retry: Optional[RetryConfig] = RetryConfig(),
-        circuit_breaker: Optional[CircuitBreakerConfig] = CircuitBreakerConfig(),
-        bulkhead: Optional[BulkheadConfig] = None,
-        logger: Optional[logging.Logger] = None,
-        interceptors: Optional[List[AsyncInterceptor]] = None,
-        client: Optional[httpx.AsyncClient] = None,
+        retry: RetryConfig | None = RetryConfig(),
+        circuit_breaker: CircuitBreakerConfig | None = CircuitBreakerConfig(),
+        bulkhead: BulkheadConfig | None = None,
+        logger: logging.Logger | None = None,
+        interceptors: list[AsyncInterceptor] | None = None,
+        client: httpx.AsyncClient | None = None,
     ):
         """
         Initialize the AsyncRestClient.
@@ -91,8 +91,8 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
         self._client_owned = client is None
 
         # Pipelines are built lazily (registry access is async) in __aenter__/request.
-        self._read_pipeline: Optional[AsyncBehavior] = None
-        self._write_pipeline: Optional[AsyncBehavior] = None
+        self._read_pipeline: AsyncBehavior | None = None
+        self._write_pipeline: AsyncBehavior | None = None
 
     @property
     def client(self) -> httpx.AsyncClient:
@@ -104,7 +104,7 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
             self._client_owned = True
         return self._client
 
-    async def _resolve_breaker(self) -> Optional[AsyncCircuitBreaker]:
+    async def _resolve_breaker(self) -> AsyncCircuitBreaker | None:
         """Resolve the shared circuit breaker from the registry, or None if disabled."""
         if self._circuit_breaker_config is None:
             return None
@@ -114,7 +114,7 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
             reset_timeout=self._circuit_breaker_config.reset_timeout,
         )
 
-    def _resolve_bulkhead(self) -> Optional[AsyncBulkhead]:
+    def _resolve_bulkhead(self) -> AsyncBulkhead | None:
         """Resolve the shared bulkhead from the registry, or None if disabled."""
         if self._bulkhead_config is None:
             return None
@@ -130,10 +130,16 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
             breaker = await self._resolve_breaker()
             bulkhead = self._resolve_bulkhead()
             self._read_pipeline = self._build_read_pipeline(
-                breaker=breaker, bulkhead=bulkhead, retry=self._retry, interceptors=self._interceptors
+                breaker=breaker,
+                bulkhead=bulkhead,
+                retry=self._retry,
+                interceptors=self._interceptors,
             )
             self._write_pipeline = self._build_write_pipeline(
-                breaker=breaker, bulkhead=bulkhead, retry=self._retry, interceptors=self._interceptors
+                breaker=breaker,
+                bulkhead=bulkhead,
+                retry=self._retry,
+                interceptors=self._interceptors,
             )
 
     @property
@@ -167,10 +173,10 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
 
     def _build_read_pipeline(
         self,
-        breaker: Optional[AsyncCircuitBreaker],
-        bulkhead: Optional[AsyncBulkhead],
-        retry: Optional[RetryConfig],
-        interceptors: Optional[List[AsyncInterceptor]],
+        breaker: AsyncCircuitBreaker | None,
+        bulkhead: AsyncBulkhead | None,
+        retry: RetryConfig | None,
+        interceptors: list[AsyncInterceptor] | None,
     ) -> AsyncBehavior:
         """
         Build the read pipeline for GET and HEAD requests.
@@ -206,7 +212,9 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
             )
 
         # 5. AsyncResponseDataSchemaValidationBehavior - validates response data schema (outside retry, not retried)
-        pipeline = AsyncResponseDataSchemaValidationBehavior(response_data_schema=None, next_behavior=pipeline)
+        pipeline = AsyncResponseDataSchemaValidationBehavior(
+            response_data_schema=None, next_behavior=pipeline
+        )
 
         # 6. AsyncCircuitBreakerBehavior - wraps retry logic
         if breaker:
@@ -218,7 +226,9 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
             pipeline = AsyncBulkheadBehavior(bulkhead=bulkhead, next_behavior=pipeline)
 
         # 8. AsyncRequestDataSchemaValidationBehavior - validates request schema at the start
-        pipeline = AsyncRequestDataSchemaValidationBehavior(request_data_schema=None, next_behavior=pipeline)
+        pipeline = AsyncRequestDataSchemaValidationBehavior(
+            request_data_schema=None, next_behavior=pipeline
+        )
 
         # 9. AsyncInterceptorBehavior - outermost layer for custom hooks
         if interceptors:
@@ -228,10 +238,10 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
 
     def _build_write_pipeline(
         self,
-        breaker: Optional[AsyncCircuitBreaker],
-        bulkhead: Optional[AsyncBulkhead],
-        retry: Optional[RetryConfig],
-        interceptors: Optional[List[AsyncInterceptor]],
+        breaker: AsyncCircuitBreaker | None,
+        bulkhead: AsyncBulkhead | None,
+        retry: RetryConfig | None,
+        interceptors: list[AsyncInterceptor] | None,
     ) -> AsyncBehavior:
         """
         Build the write pipeline for POST, PUT, PATCH, and DELETE requests.
@@ -268,7 +278,9 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
             )
 
         # 5. AsyncResponseDataSchemaValidationBehavior - validates response data schema (outside retry, not retried)
-        pipeline = AsyncResponseDataSchemaValidationBehavior(response_data_schema=None, next_behavior=pipeline)
+        pipeline = AsyncResponseDataSchemaValidationBehavior(
+            response_data_schema=None, next_behavior=pipeline
+        )
 
         # 6. AsyncCircuitBreakerBehavior - wraps retry logic
         if breaker:
@@ -282,7 +294,9 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
         pipeline = AsyncIdempotencyHeaderBehavior(next_behavior=pipeline)
 
         # 9. AsyncRequestDataSchemaValidationBehavior - validates request data schema at the start
-        pipeline = AsyncRequestDataSchemaValidationBehavior(request_data_schema=None, next_behavior=pipeline)
+        pipeline = AsyncRequestDataSchemaValidationBehavior(
+            request_data_schema=None, next_behavior=pipeline
+        )
 
         # 10. AsyncInterceptorBehavior - outermost layer for custom hooks
         if interceptors:
@@ -294,7 +308,7 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
         self,
         request_context: RequestContext,
         error: Exception,
-        response_context: Optional[ResponseContext] = None,
+        response_context: ResponseContext | None = None,
     ) -> ErrorContext:
         """Create a detailed error context for logging and error reporting."""
         return ErrorContext(
@@ -315,14 +329,14 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
         self,
         method: str,
         endpoint: str,
-        response_data_schema: Type[ResponseT],
-        request_data: Optional[RequestT] = None,
-        params: Optional[dict[str, str]] = None,
-        headers: Optional[dict[str, str]] = None,
+        response_data_schema: type[ResponseT],
+        request_data: RequestT | None = None,
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
         # Per-request overrides
-        max_retries: Optional[int] = None,
-        retry_backoff_factor: Optional[float] = None,
-    ) -> Optional[ResponseT]:
+        max_retries: int | None = None,
+        retry_backoff_factor: float | None = None,
+    ) -> ResponseT | None:
         """
         Execute an HTTP request by processing it through the behavior pipeline.
 
@@ -366,7 +380,7 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
         request_data_dict = None
         request_data_schema = None
         if request_data is not None:
-            request_data_dict = request_data.model_dump(by_alias=True, mode='json')
+            request_data_dict = request_data.model_dump(by_alias=True, mode="json")
             request_data_schema = type(request_data)
 
         request_context = RequestContext(
@@ -422,12 +436,12 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
     async def get(
         self,
         endpoint: str,
-        response_data_schema: Type[ResponseT],
-        params: Optional[dict[str, str]] = None,
-        headers: Optional[dict[str, str]] = None,
-        max_retries: Optional[int] = None,
-        retry_backoff_factor: Optional[float] = None,
-    ) -> Optional[ResponseT]:
+        response_data_schema: type[ResponseT],
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
+        max_retries: int | None = None,
+        retry_backoff_factor: float | None = None,
+    ) -> ResponseT | None:
         """
         Make a GET request
 
@@ -457,12 +471,12 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
         self,
         endpoint: str,
         request_data: RequestT,
-        response_data_schema: Type[ResponseT],
-        params: Optional[dict[str, str]] = None,
-        headers: Optional[dict[str, str]] = None,
-        max_retries: Optional[int] = None,
-        retry_backoff_factor: Optional[float] = None,
-    ) -> Optional[ResponseT]:
+        response_data_schema: type[ResponseT],
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
+        max_retries: int | None = None,
+        retry_backoff_factor: float | None = None,
+    ) -> ResponseT | None:
         """Make a POST request"""
         return await self.__request(
             method="POST",
@@ -479,12 +493,12 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
         self,
         endpoint: str,
         request_data: RequestT,
-        response_data_schema: Type[ResponseT],
-        params: Optional[dict[str, str]] = None,
-        headers: Optional[dict[str, str]] = None,
-        max_retries: Optional[int] = None,
-        retry_backoff_factor: Optional[float] = None,
-    ) -> Optional[ResponseT]:
+        response_data_schema: type[ResponseT],
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
+        max_retries: int | None = None,
+        retry_backoff_factor: float | None = None,
+    ) -> ResponseT | None:
         """Make a PUT request"""
         return await self.__request(
             method="PUT",
@@ -500,12 +514,12 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
     async def delete(
         self,
         endpoint: str,
-        response_data_schema: Type[ResponseT],
-        params: Optional[dict[str, str]] = None,
-        headers: Optional[dict[str, str]] = None,
-        max_retries: Optional[int] = None,
-        retry_backoff_factor: Optional[float] = None,
-    ) -> Optional[ResponseT]:
+        response_data_schema: type[ResponseT],
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
+        max_retries: int | None = None,
+        retry_backoff_factor: float | None = None,
+    ) -> ResponseT | None:
         """Make a DELETE request"""
         return await self.__request(
             method="DELETE",
@@ -522,12 +536,12 @@ class AsyncRestClient(Generic[RequestT, ResponseT]):
         self,
         endpoint: str,
         request_data: RequestT,
-        response_data_schema: Type[ResponseT],
-        params: Optional[dict[str, str]] = None,
-        headers: Optional[dict[str, str]] = None,
-        max_retries: Optional[int] = None,
-        retry_backoff_factor: Optional[float] = None,
-    ) -> Optional[ResponseT]:
+        response_data_schema: type[ResponseT],
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
+        max_retries: int | None = None,
+        retry_backoff_factor: float | None = None,
+    ) -> ResponseT | None:
         """Make a PATCH request"""
         return await self.__request(
             method="PATCH",
